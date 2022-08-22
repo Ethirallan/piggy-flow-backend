@@ -6,12 +6,20 @@ import { AppService } from './app.service';
 import { TypeOrmConfigService } from './shared/typeorm.service';
 import { UserModule } from './user/user.module';
 import { AuthMiddleware } from './middleware/auth.middleware';
+import { CategoryModule } from './category/category.module';
+import { ShopModule } from './shop/shop.module';
+import { AccountModule } from './account/account.module';
+import { BillModule } from './bill/bill.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     TypeOrmModule.forRootAsync({ useClass: TypeOrmConfigService }),
     UserModule,
+    CategoryModule,
+    ShopModule,
+    AccountModule,
+    BillModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, ParseIntPipe, Param, Req } from '@nestjs/common';
+import { Controller, Get, Body, Patch, ParseIntPipe, Param, Req } from '@nestjs/common';
 import { UserService } from './user.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -8,12 +8,7 @@ import { User } from './entities/user.entity';
 export class UserController {
   constructor(private readonly userService: UserService) {}
 
-  @Post()
-  create(@Body() createUserDto: CreateUserDto) {
-    return this.userService.create(createUserDto);
-  }
-
-  @Get('getUserByID/:id')
+  @Get('getUserById/:id')
   getUserData(@Param('id', ParseIntPipe) id: number) {
     return this.userService.findOne(id);
   }
