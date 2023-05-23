@@ -28,8 +28,7 @@ export class AppModule {
   configure(consumer: MiddlewareConsumer) {
     consumer.apply(AuthMiddleware)
       .exclude(
-        // { path: 'user/:id', method: RequestMethod.ALL },
-        // { path: 'user/login', method: RequestMethod.GET },
+        { path: 'bill/getPhoto/:path', method: RequestMethod.GET },
       )
       .forRoutes({
         path: '*', method: RequestMethod.ALL

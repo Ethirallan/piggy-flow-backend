@@ -10,6 +10,9 @@ export class BillPhoto {
   bill: Bill;
 
   @Column({type: 'text', charset: "utf8mb4", collation: "utf8mb4_unicode_ci"})
+  name: string;
+
+  @Column({type: 'text', charset: "utf8mb4", collation: "utf8mb4_unicode_ci"})
   path: string;
 
   @Column({type: 'text', charset: "utf8mb4", collation: "utf8mb4_unicode_ci"})

@@ -24,7 +24,7 @@ export class BillService {
     try {
       const bill = await this.billRepository.findOneOrFail({
         where: {
-          id: id 
+          id: id
         },
         relations: ['user', 'account', 'shop', 'category', 'photos']
       });
@@ -37,11 +37,14 @@ export class BillService {
   getBillsByUserId(id: number) {
     return this.billRepository.find({
       where: {
-        user: { 
-          id: id 
-        } 
+        user: {
+          id: id
+        }
       },
-      relations: ['user', 'account', 'shop', 'category']
+      relations: ['user', 'account', 'shop', 'category'],
+      order: {
+        date: "DESC",
+      }
     });
   }
 
