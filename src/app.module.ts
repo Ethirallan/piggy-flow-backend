@@ -10,6 +10,7 @@ import { CategoryModule } from './category/category.module';
 import { ShopModule } from './shop/shop.module';
 import { AccountModule } from './account/account.module';
 import { BillModule } from './bill/bill.module';
+import { SubscriptionModule } from './subscription/subscription.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { BillModule } from './bill/bill.module';
     ShopModule,
     AccountModule,
     BillModule,
+    SubscriptionModule,
   ],
   controllers: [AppController],
   providers: [AppService],
@@ -28,6 +30,7 @@ export class AppModule {
   configure(consumer: MiddlewareConsumer) {
     consumer.apply(AuthMiddleware)
       .exclude(
+        { path: 'health', method: RequestMethod.GET },
         { path: 'bill/getPhoto/:path', method: RequestMethod.GET },
       )
       .forRoutes({
