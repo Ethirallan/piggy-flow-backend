@@ -8,6 +8,7 @@ import { BillPhoto } from './entities/bill_photo.entity';
 @Module({
   imports: [TypeOrmModule.forFeature([Bill, BillPhoto])],
   controllers: [BillController],
-  providers: [BillService]
+  providers: [BillService],
+  exports: [BillService]
 })
 export class BillModule {}

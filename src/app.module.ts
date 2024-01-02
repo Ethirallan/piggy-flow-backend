@@ -32,6 +32,7 @@ export class AppModule {
       .exclude(
         { path: 'health', method: RequestMethod.GET },
         { path: 'bill/getPhoto/:path', method: RequestMethod.GET },
+        { path: 'subscription/insertSubscriptions/:secret', method: RequestMethod.GET },
       )
       .forRoutes({
         path: '*', method: RequestMethod.ALL

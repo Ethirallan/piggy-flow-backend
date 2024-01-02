@@ -48,4 +48,13 @@ export class SubscriptionService {
   remove(id: number) {
     return this.subscriptionRepository.delete(id);
   }
+
+  getSubscriptionsByDay(day: number) {
+    return this.subscriptionRepository.find({
+      where: {
+        chargeDay: day
+      },
+      relations: ['user', 'account', 'shop', 'category']
+    });
+  }
 }
