@@ -13,6 +13,7 @@ const re = /(?:\.([^.]+))?$/;
 
 const encodeImageToBlurhash = (path: string): Promise<string> => new Promise((resolve, reject) => {
   sharp(path)
+    .rotate()
     .raw()
     .ensureAlpha()
     .resize(32, 32, { fit: "inside" })
