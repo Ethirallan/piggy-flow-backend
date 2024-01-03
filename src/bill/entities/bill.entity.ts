@@ -11,10 +11,10 @@ export class Bill {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @ManyToOne(() => User, user => user.bills)
+  @ManyToOne(() => User, user => user.bills, { onDelete: 'CASCADE' })
   user: User;
 
-  @ManyToOne(() => Account, account => account.bills, { nullable: true })
+  @ManyToOne(() => Account, account => account.bills, { nullable: true, onDelete: 'CASCADE' })
   account: Account;
 
   @Column()
