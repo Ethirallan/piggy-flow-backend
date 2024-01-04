@@ -13,6 +13,9 @@ export class Category {
   @Column({type: 'varchar', charset: "utf8mb4", collation: "utf8mb4_unicode_ci"})
   name: string;
 
+  @Column({type: 'varchar', length: 20, charset: "utf8mb4", collation: "utf8mb4_unicode_ci", nullable: true})
+  emoji: string;
+
   @CreateDateColumn()
   created: Date;
 
