@@ -10,10 +10,10 @@ export class Subscription {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @ManyToOne(() => User, user => user.bills)
+  @ManyToOne(() => User, user => user.subscriptions)
   user: User;
 
-  @ManyToOne(() => Account, account => account.bills, { nullable: true })
+  @ManyToOne(() => Account, account => account.subscriptions, { nullable: true })
   account: Account;
 
   @Column()
