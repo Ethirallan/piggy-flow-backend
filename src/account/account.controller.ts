@@ -2,21 +2,42 @@ import { Controller, Get, Post, Body, Patch, Param, Delete, ParseIntPipe, Req } 
 import { AccountService } from './account.service';
 import { CreateAccountDto } from './dto/create-account.dto';
 import { UpdateAccountDto } from './dto/update-account.dto';
+import { UserService } from 'src/user/user.service';
+import { BillService } from 'src/bill/bill.service';
 
 @Controller('account')
 export class AccountController {
-  constructor(private readonly accountService: AccountService) {}
+  constructor(
+    private readonly accountService: AccountService,
+    private readonly userService: UserService,
+    private readonly billService: BillService,
+  ) { }
 
   @Post()
   create(@Req() req: any, @Body() createAccountDto: CreateAccountDto) {
-
-    createAccountDto.users = [...createAccountDto.users??[], req.user];
+    createAccountDto.users = [...createAccountDto.users ?? [], req.user];
     return this.accountService.create(createAccountDto);
   }
 
   @Get('getAccountsByUser')
-  getAccountsByUserId(@Req() req: any) {
-    return this.accountService.getAccountsByUserId(req.user.id);
+  async getAccountsByUserId(@Req() req: any) {
+    const accounts = await this.accountService.getAccountsByUserId(req.user.id);
+    const { categories, shops, subscriptions, ...user } = await this.userService.getlUserWithRelationsById(req.user.id);
+    const bills = await this.billService.getPersonalBillsByUserId(req.user.id); // TODO: workaround for JS Heap out of memory
+
+    const personalAccount = {
+      id: null,
+      name: 'Personal',
+      created: null,
+      lastUpdate: null,
+      users: [user],
+      bills: bills,
+      categories: categories,
+      shops: shops,
+      subscriptions: subscriptions
+    }
+
+    return [personalAccount, ...accounts];
   }
 
   @Patch(':id')

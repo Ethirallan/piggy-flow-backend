@@ -28,10 +28,26 @@ export class UserService {
 
   async getUserByUid(id: string): Promise<User | null> {
     try {
-      const user = await this.userRepository.findOneOrFail({where: { uid: id} });
+      const user = await this.userRepository.findOneOrFail({ where: { uid: id } });
       return user;
     } catch (error) {
       return null;
+    }
+  }
+
+  async getlUserWithRelationsById(id: number) {
+    try {
+      const user = await this.userRepository.createQueryBuilder('user')
+        // .leftJoinAndSelect('user.bills', 'bill', 'bill.accountId IS NULL') // TODO: causes JS Heap out of memory
+        .leftJoinAndSelect('user.categories', 'category', 'category.accountId IS NULL')
+        .leftJoinAndSelect('user.shops', 'shop', 'shop.accountId IS NULL')
+        .leftJoinAndSelect('user.subscriptions', 'subscription', 'subscription.accountId IS NULL')
+        .where('user.id = :id', { id })
+        .getOne();
+
+      return user;
+    } catch (error) {
+      throw new NotFoundException();
     }
   }
 

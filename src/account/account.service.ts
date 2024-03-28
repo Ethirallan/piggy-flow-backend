@@ -20,6 +20,10 @@ export class AccountService {
     try {
       const accounts = await this.accountRepository.createQueryBuilder('account')
         .leftJoinAndSelect('account.users', 'user', 'user.id =:id', {id})
+        .leftJoinAndSelect('account.bills', 'bill')
+        .leftJoinAndSelect('account.categories', 'category')
+        .leftJoinAndSelect('account.shops', 'shop')
+        .leftJoinAndSelect('account.subscriptions', 'subscription')
         .orderBy('account.id', 'DESC')
         .getMany();
 

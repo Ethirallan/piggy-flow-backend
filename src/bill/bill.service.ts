@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 import { CreateBillPhotoDto } from './dto/create-bill-photo.dto';
 import { CreateBillDto } from './dto/create-bill.dto';
 import { UpdateBillDto } from './dto/update-bill.dto';
@@ -40,6 +40,22 @@ export class BillService {
         user: {
           id: id
         }
+      },
+      relations: ['user', 'account', 'shop', 'category'],
+      order: {
+        date: "DESC",
+      }
+    });
+  }
+
+  // bills without account
+  getPersonalBillsByUserId(id: number) {
+    return this.billRepository.find({
+      where: {
+        user: {
+          id: id
+        },
+        account: IsNull()
       },
       relations: ['user', 'account', 'shop', 'category'],
       order: {
