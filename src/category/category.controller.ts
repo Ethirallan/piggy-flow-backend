@@ -9,7 +9,6 @@ export class CategoryController {
 
   @Post()
   create(@Req() req: any, @Body() createCategoryDto: CreateCategoryDto) {
-    console.log(createCategoryDto);
     createCategoryDto.user = req.user;
     return this.categoryService.create(createCategoryDto);
   }
