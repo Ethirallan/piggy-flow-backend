@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CreateShopDto } from './dto/create-shop.dto';
@@ -10,7 +10,7 @@ export class ShopService {
 
   constructor(
     @InjectRepository(Shop)
-    private shopRepository: Repository<Shop>,
+    @Inject('SHOP_REPOSITORY_TOKEN') private shopRepository: Repository<Shop>,
   ) { }
 
   create(createShopDto: CreateShopDto) {
@@ -20,18 +20,25 @@ export class ShopService {
   getShopsByUserId(id: number) {
     return this.shopRepository.find({
       where: {
-        user: { 
-          id: id 
-        } 
+        user: {
+          id: id
+        }
       }
     });
   }
 
-  update(id: number, updateShopDto: UpdateShopDto) {
-    return this.shopRepository.update(id, updateShopDto);
+  async update(id: number, updateShopDto: UpdateShopDto) {
+    const updateResult = await this.shopRepository.update(id, updateShopDto);
+
+    if (updateResult.affected === 0) {
+      throw new NotFoundException(`Shop with ID "${id}" not found`);
+    }
   }
 
-  remove(id: number) {
-    return this.shopRepository.delete(id);
+  async remove(id: number) {
+    const deleteResult = await this.shopRepository.delete(id);
+    if (deleteResult.affected === 0) {
+      throw new NotFoundException(`Shop with ID "${id}" not found`);
+    }
   }
 }
