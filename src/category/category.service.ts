@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CreateCategoryDto } from './dto/create-category.dto';
@@ -10,7 +10,7 @@ export class CategoryService {
 
   constructor(
     @InjectRepository(Category)
-    private categoryRepository: Repository<Category>,
+    @Inject('CATEGORY_REPOSITORY_TOKEN') private categoryRepository: Repository<Category>,
   ) { }
 
   create(createCategoryDto: CreateCategoryDto) {
@@ -20,18 +20,25 @@ export class CategoryService {
   getCategoriesByUserId(id: number) {
     return this.categoryRepository.find({
       where: {
-        user: { 
-          id: id 
-        } 
+        user: {
+          id: id
+        }
       }
     });
   }
 
-  update(id: number, updateCategoryDto: UpdateCategoryDto) {
-    return this.categoryRepository.update(id, updateCategoryDto);
+  async update(id: number, updateCategoryDto: UpdateCategoryDto) {
+    const updateResult = await this.categoryRepository.update(id, updateCategoryDto);
+
+    if (updateResult.affected === 0) {
+      throw new NotFoundException(`Category with ID "${id}" not found`);
+    }
   }
 
-  remove(id: number) {
-    return this.categoryRepository.delete(id);
+  async remove(id: number) {
+    const deleteResult = await this.categoryRepository.delete(id);
+    if (deleteResult.affected === 0) {
+      throw new NotFoundException(`Category with ID "${id}" not found`);
+    }
   }
 }
