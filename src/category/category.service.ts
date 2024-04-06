@@ -10,7 +10,7 @@ export class CategoryService {
 
   constructor(
     @InjectRepository(Category)
-    @Inject('CATEGORY_REPOSITORY_TOKEN') private categoryRepository: Repository<Category>,
+    private categoryRepository: Repository<Category>,
   ) { }
 
   create(createCategoryDto: CreateCategoryDto) {
