@@ -9,6 +9,11 @@ import { BillModule } from 'src/bill/bill.module';
 @Module({
   imports: [TypeOrmModule.forFeature([Account]), UserModule, BillModule],
   controllers: [AccountController],
-  providers: [AccountService]
+  providers: [
+    {
+      provide: 'ACCOUNT_SERVICE',
+      useClass: AccountService,
+    },
+  ]
 })
 export class AccountModule {}
