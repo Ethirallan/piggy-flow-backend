@@ -10,13 +10,14 @@ import { NotFoundException } from '@nestjs/common';
 describe('ShopService', () => {
   let service: ShopService;
   let shopRepository: Repository<Shop>;
+  const SHOP_REPOSITORY_TOKEN = getRepositoryToken(Shop);
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ShopService,
         {
-          provide: getRepositoryToken(Shop),
+          provide: SHOP_REPOSITORY_TOKEN,
           useValue: {
             save: jest.fn().mockResolvedValue('shop'),
             find: jest.fn().mockResolvedValue(['shop1', 'shop2']),
@@ -28,7 +29,7 @@ describe('ShopService', () => {
     }).compile();
 
     service = module.get<ShopService>(ShopService);
-    shopRepository = module.get<Repository<Shop>>(getRepositoryToken(Shop));
+    shopRepository = module.get<Repository<Shop>>(SHOP_REPOSITORY_TOKEN);
   });
 
   it('should be defined', () => {
