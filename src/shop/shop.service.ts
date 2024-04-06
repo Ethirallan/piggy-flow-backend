@@ -10,7 +10,7 @@ export class ShopService {
 
   constructor(
     @InjectRepository(Shop)
-    @Inject('SHOP_REPOSITORY_TOKEN') private shopRepository: Repository<Shop>,
+    private shopRepository: Repository<Shop>,
   ) { }
 
   create(createShopDto: CreateShopDto) {
