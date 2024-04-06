@@ -10,6 +10,15 @@ import { BillPhoto } from 'src/bill/entities/bill_photo.entity';
 @Module({
   imports: [TypeOrmModule.forFeature([Subscription, Bill, BillPhoto])],
   controllers: [SubscriptionController],
-  providers: [SubscriptionService, BillService],
+  providers: [
+    {
+      provide: 'BILL_SERVICE',
+      useClass: BillService,
+    },
+    {
+      provide: 'SUBSCRIPTION_SERVICE',
+      useClass: SubscriptionService,
+    },
+  ],
 })
 export class SubscriptionModule { }

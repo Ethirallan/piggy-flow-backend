@@ -41,12 +41,18 @@ export class SubscriptionService {
     });
   }
 
-  update(id: number, updateSubscriptionDto: UpdateSubscriptionDto) {
-    return this.subscriptionRepository.update(id, updateSubscriptionDto);
+  async update(id: number, updateSubscriptionDto: UpdateSubscriptionDto) {
+    const updateResult = await this.subscriptionRepository.update(id, updateSubscriptionDto);
+    if (updateResult.affected === 0) {
+      throw new NotFoundException(`Subscription with ID "${id}" not found`);
+    }
   }
 
-  remove(id: number) {
-    return this.subscriptionRepository.delete(id);
+  async remove(id: number) {
+    const deleteResult = await this.subscriptionRepository.delete(id);
+    if (deleteResult.affected === 0) {
+      throw new NotFoundException(`Subscription with ID "${id}" not found`);
+    }
   }
 
   getSubscriptionsByDay(day: number) {
