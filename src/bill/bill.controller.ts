@@ -1,4 +1,17 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, ParseIntPipe, Req, UseInterceptors, UploadedFiles, Res } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+  ParseIntPipe,
+  Req,
+  UseInterceptors,
+  UploadedFiles,
+  Res,
+} from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
 import { BillService } from './bill.service';
 import { CreateBillDto } from './dto/create-bill.dto';
@@ -11,17 +24,24 @@ import * as uuid from 'uuid-by-string';
 
 const re = /(?:\.([^.]+))?$/;
 
-const encodeImageToBlurhash = (path: string): Promise<string> => new Promise((resolve, reject) => {
-  sharp(path)
-    .rotate()
-    .raw()
-    .ensureAlpha()
-    .resize(32, 32, { fit: "inside" })
-    .toBuffer((err, buffer, { width, height }) => {
-      if (err) return reject(err);
-      resolve(encode(new Uint8ClampedArray(buffer), width, height, 7, 7));
-    });
-});
+const encodeImageToBlurhash = (path: string): Promise<string> =>
+  new Promise((resolve, reject) => {
+    sharp(path)
+      .rotate()
+      .raw()
+      .ensureAlpha()
+      .resize(32, 32, { fit: 'inside' })
+      .toBuffer((err, buffer, info) => {
+        if (err) return reject(err);
+
+        const { width, height } = info;
+        if (typeof width !== 'number' || typeof height !== 'number') {
+          return reject(new Error('Invalid image dimensions'));
+        }
+
+        resolve(encode(new Uint8ClampedArray(buffer), width, height, 7, 7));
+      });
+  });
 
 @Controller('bill')
 export class BillController {
@@ -38,7 +58,10 @@ export class BillController {
   }
 
   @Patch(':id')
-  update(@Param('id', ParseIntPipe) id: number, @Body() updateBillDto: UpdateBillDto) {
+  update(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() updateBillDto: UpdateBillDto,
+  ) {
     return this.billService.update(id, updateBillDto);
   }
 
@@ -48,26 +71,32 @@ export class BillController {
   }
 
   @Post()
-  @UseInterceptors(FilesInterceptor('files', null, {
-    storage: diskStorage({
-      destination: './uploads',
-      filename: (req, file, cb) => {
-        var fileExtension = re.exec(file.originalname)[1];
+  @UseInterceptors(
+    FilesInterceptor('files', null, {
+      storage: diskStorage({
+        destination: './uploads',
+        filename: (req, file, cb) => {
+          var fileExtension = re.exec(file.originalname)[1];
 
-        const name: string = uuid(file.originalname);
-        const path: string = name + '.' + fileExtension;
+          const name: string = uuid(file.originalname);
+          const path: string = name + '.' + fileExtension;
 
-        cb(null, path);
+          cb(null, path);
+        },
+      }),
+      fileFilter: (req, file, cb) => {
+        if (!file.originalname.match(/\.(jpg|png|jpeg|gif)$/)) {
+          return cb(null, false);
+        }
+        return cb(null, true);
       },
     }),
-    fileFilter: (req, file, cb) => {
-      if (!file.originalname.match(/\.(jpg|png|jpeg|gif)$/)) {
-        return cb(null, false);
-      }
-      return cb(null, true);
-    },
-  }))
-  async addNewBill(@Body() data: any, @Req() req: any, @UploadedFiles() files: Array<Express.Multer.File>) {
+  )
+  async addNewBill(
+    @Body() data: any,
+    @Req() req: any,
+    @UploadedFiles() files: Array<Express.Multer.File>,
+  ) {
     if (files) {
       data = JSON.parse(data.body);
     }
@@ -77,14 +106,18 @@ export class BillController {
     createBillDto.user = req['user'];
     const bill = await this.billService.create(createBillDto);
     if (files) {
-      for (let file of files) {
-          let newPhoto = new CreateBillPhotoDto();
-          newPhoto.name = file.originalname;
-          newPhoto.path = file.filename;
+      for (const file of files) {
+        const newPhoto = new CreateBillPhotoDto();
+        newPhoto.name = file.originalname;
+        newPhoto.path = file.filename;
+        try {
           newPhoto.blurhash = await encodeImageToBlurhash(file.path);
-          newPhoto.bill = bill;
-          await this.billService.addPhoto(newPhoto);
-      };
+        } catch {
+          newPhoto.blurhash = '000000';
+        }
+        newPhoto.bill = bill;
+        await this.billService.addPhoto(newPhoto);
+      }
     }
 
     return this.billService.getBillById(bill.id);
