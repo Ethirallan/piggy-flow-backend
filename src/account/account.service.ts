@@ -10,7 +10,7 @@ export class AccountService {
   constructor(
     @InjectRepository(Account)
     private accountRepository: Repository<Account>,
-  ) { }
+  ) {}
 
   create(createAccountDto: CreateAccountDto) {
     return this.accountRepository.save(createAccountDto);
@@ -18,9 +18,11 @@ export class AccountService {
 
   async getAccountsByUserId(id: number) {
     try {
-      const accounts = await this.accountRepository.createQueryBuilder('account')
-        .leftJoinAndSelect('account.users', 'user', 'user.id =:id', {id})
+      const accounts = await this.accountRepository
+        .createQueryBuilder('account')
+        .leftJoinAndSelect('account.users', 'user', 'user.id =:id', { id })
         .orderBy('account.id', 'DESC')
+        .where('user.id = :id', { id })
         .getMany();
 
       return accounts;
