@@ -14,7 +14,7 @@ export class BillService {
     private billRepository: Repository<Bill>,
     @InjectRepository(BillPhoto)
     private billPhotoRepository: Repository<BillPhoto>,
-  ) { }
+  ) {}
 
   create(createBillDto: CreateBillDto) {
     return this.billRepository.save(createBillDto);
@@ -24,9 +24,9 @@ export class BillService {
     try {
       const bill = await this.billRepository.findOneOrFail({
         where: {
-          id: id
+          id: id,
         },
-        relations: ['user', 'account', 'shop', 'category', 'photos']
+        relations: ['user', 'account', 'shop', 'category', 'photos'],
       });
       return bill;
     } catch (error) {
@@ -35,17 +35,17 @@ export class BillService {
   }
 
   getBillsByUserId(id: number) {
-    return this.billRepository.find({
-      where: {
-        user: {
-          id: id
-        }
-      },
-      relations: ['user', 'account', 'shop', 'category'],
-      order: {
-        date: "DESC",
-      }
-    });
+    return this.billRepository
+      .createQueryBuilder('bill')
+      .leftJoinAndSelect('bill.user', 'user')
+      .leftJoinAndSelect('bill.account', 'account')
+      .leftJoinAndSelect('account.users', 'accountUsers') // Many-to-many
+      .leftJoinAndSelect('bill.shop', 'shop')
+      .leftJoinAndSelect('bill.category', 'category')
+      .where('user.id = :id', { id })
+      .orWhere('accountUsers.id = :id', { id })
+      .orderBy('bill.date', 'DESC')
+      .getMany();
   }
 
   update(id: number, updateBillDto: UpdateBillDto) {
@@ -65,7 +65,7 @@ export class BillService {
     try {
       const photo = await this.billPhotoRepository.findOneOrFail({
         where: {
-          path: path
+          path: path,
         },
       });
       return photo;
