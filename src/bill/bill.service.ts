@@ -6,6 +6,7 @@ import { CreateBillDto } from './dto/create-bill.dto';
 import { UpdateBillDto } from './dto/update-bill.dto';
 import { Bill } from './entities/bill.entity';
 import { BillPhoto } from './entities/bill_photo.entity';
+import { deletePhotoFiles } from './photo-files';
 
 @Injectable()
 export class BillService {
@@ -32,6 +33,43 @@ export class BillService {
     } catch (error) {
       throw new NotFoundException();
     }
+  }
+
+  async getOwnedBill(id: number, userId: number): Promise<Bill> {
+    if (userId === undefined || userId === null) throw new NotFoundException();
+    const bill = await this.billRepository.findOne({
+      where: { id },
+      relations: [
+        'user',
+        'account',
+        'account.users',
+        'shop',
+        'category',
+        'photos',
+      ],
+    });
+    if (
+      !bill ||
+      !(
+        bill.user?.id === userId ||
+        bill.account?.users?.some((u) => u.id === userId)
+      )
+    ) {
+      throw new NotFoundException();
+    }
+    return bill;
+  }
+
+  async isPhotoPathReferenced(path: string): Promise<boolean> {
+    return (await this.billPhotoRepository.count({ where: { path } })) > 0;
+  }
+
+  async removeOwned(id: number, userId: number) {
+    const bill = await this.getOwnedBill(id, userId);
+    const paths = (bill.photos ?? []).map((p) => p.path);
+    const result = await this.billRepository.delete(id);
+    await deletePhotoFiles(paths, (path) => this.isPhotoPathReferenced(path));
+    return result;
   }
 
   getBillsByUserId(id: number) {

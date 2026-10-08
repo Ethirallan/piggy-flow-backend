@@ -11,6 +11,7 @@ import {
   UseInterceptors,
   UploadedFiles,
   Res,
+  NotFoundException,
 } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
 import { BillService } from './bill.service';
@@ -53,8 +54,10 @@ export class BillController {
   }
 
   @Get('getBillDetails/:id')
-  getBillDetails(@Param('id', ParseIntPipe) id: number) {
-    return this.billService.getBillById(id);
+  async getBillDetails(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    // req.user is null for a Firebase user without a DB row: no access.
+    if (!req.user) throw new NotFoundException();
+    return this.billService.getOwnedBill(id, req.user.id);
   }
 
   @Patch(':id')
@@ -66,8 +69,9 @@ export class BillController {
   }
 
   @Delete(':id')
-  remove(@Param('id', ParseIntPipe) id: number) {
-    return this.billService.remove(id);
+  async remove(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    if (!req.user) throw new NotFoundException();
+    return this.billService.removeOwned(id, req.user.id);
   }
 
   @Post()
