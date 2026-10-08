@@ -12,37 +12,34 @@ import {
   UploadedFiles,
   Res,
   NotFoundException,
+  BadRequestException,
+  ValidationPipe,
 } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
 import { BillService } from './bill.service';
 import { CreateBillDto } from './dto/create-bill.dto';
 import { UpdateBillDto } from './dto/update-bill.dto';
 import { CreateBillPhotoDto } from './dto/create-bill-photo.dto';
-import { diskStorage } from 'multer';
-import { encode } from 'blurhash';
-import * as sharp from 'sharp';
-import * as uuid from 'uuid-by-string';
+import {
+  deletePhotoFiles,
+  encodeImageToBlurhash,
+  photoUploadOptions,
+  uploadsDir,
+} from './photo-files';
 
-const re = /(?:\.([^.]+))?$/;
+// The same options as the global pipe in main.ts. PATCH validates by hand
+// because a multipart body arrives as a JSON string in `body`.
+const updateValidation = new ValidationPipe({
+  whitelist: true,
+  transform: true,
+});
 
-const encodeImageToBlurhash = (path: string): Promise<string> =>
-  new Promise((resolve, reject) => {
-    sharp(path)
-      .rotate()
-      .raw()
-      .ensureAlpha()
-      .resize(32, 32, { fit: 'inside' })
-      .toBuffer((err, buffer, info) => {
-        if (err) return reject(err);
-
-        const { width, height } = info;
-        if (typeof width !== 'number' || typeof height !== 'number') {
-          return reject(new Error('Invalid image dimensions'));
-        }
-
-        resolve(encode(new Uint8ClampedArray(buffer), width, height, 7, 7));
-      });
-  });
+/** Deletes files multer stored for a request that is being rejected. */
+const discardUploads = (files: Express.Multer.File[]) =>
+  deletePhotoFiles(
+    files.map((f) => f.filename).filter(Boolean),
+    async () => false,
+  );
 
 @Controller('bill')
 export class BillController {
@@ -61,11 +58,39 @@ export class BillController {
   }
 
   @Patch(':id')
-  update(
-    @Param('id', ParseIntPipe) id: number,
-    @Body() updateBillDto: UpdateBillDto,
+  @UseInterceptors(FilesInterceptor('files', null, photoUploadOptions))
+  async update(
+    @Param('id') rawId: string,
+    @Body() data: any,
+    @Req() req: any,
+    @UploadedFiles() uploaded: Array<Express.Multer.File>,
   ) {
-    return this.billService.update(id, updateBillDto);
+    const files = uploaded ?? [];
+    let id: number;
+    let dto: UpdateBillDto;
+    try {
+      id = await new ParseIntPipe().transform(rawId, {
+        type: 'param',
+        data: 'id',
+      });
+      if (!req.user) throw new NotFoundException();
+      let plain = data;
+      if (typeof data?.body === 'string') {
+        try {
+          plain = JSON.parse(data.body);
+        } catch {
+          throw new BadRequestException('Invalid body.');
+        }
+      }
+      dto = await updateValidation.transform(plain ?? {}, {
+        type: 'body',
+        metatype: UpdateBillDto,
+      });
+    } catch (e) {
+      await discardUploads(files);
+      throw e;
+    }
+    return this.billService.updateWithPhotos(id, req.user.id, dto, files);
   }
 
   @Delete(':id')
@@ -75,27 +100,7 @@ export class BillController {
   }
 
   @Post()
-  @UseInterceptors(
-    FilesInterceptor('files', null, {
-      storage: diskStorage({
-        destination: './uploads',
-        filename: (req, file, cb) => {
-          var fileExtension = re.exec(file.originalname)[1];
-
-          const name: string = uuid(file.originalname);
-          const path: string = name + '.' + fileExtension;
-
-          cb(null, path);
-        },
-      }),
-      fileFilter: (req, file, cb) => {
-        if (!file.originalname.match(/\.(jpg|png|jpeg|gif)$/)) {
-          return cb(null, false);
-        }
-        return cb(null, true);
-      },
-    }),
-  )
+  @UseInterceptors(FilesInterceptor('files', null, photoUploadOptions))
   async addNewBill(
     @Body() data: any,
     @Req() req: any,
@@ -130,6 +135,6 @@ export class BillController {
   @Get('getPhoto/:path')
   async getPhoto(@Param('path') path: string, @Res() res: any) {
     const photo = await this.billService.getPhoto(path);
-    res.sendFile(photo.path, { root: './uploads' });
+    res.sendFile(photo.path, { root: uploadsDir() });
   }
 }

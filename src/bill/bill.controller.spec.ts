@@ -1,5 +1,9 @@
-import { NotFoundException } from '@nestjs/common';
+import { INestApplication, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import * as request from 'supertest';
 import { BillController } from './bill.controller';
 import { BillService } from './bill.service';
 
@@ -52,5 +56,163 @@ describe('BillController', () => {
       NotFoundException,
     );
     expect(service.removeOwned).not.toHaveBeenCalled();
+  });
+});
+
+describe('BillController (HTTP)', () => {
+  let app: INestApplication;
+  let uploads: string;
+  let user: any;
+  const service = {
+    updateWithPhotos: jest.fn(),
+    create: jest.fn(),
+    addPhoto: jest.fn(),
+    getBillById: jest.fn(),
+  };
+  const V4_JPG = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.jpg$/;
+  const uploaded = () => fs.readdirSync(uploads);
+
+  beforeEach(async () => {
+    jest.resetAllMocks();
+    uploads = fs.mkdtempSync(path.join(os.tmpdir(), 'bill-uploads-'));
+    process.env.UPLOADS_DIR = uploads;
+    user = { id: 7 };
+    const module: TestingModule = await Test.createTestingModule({
+      controllers: [BillController],
+      providers: [{ provide: BillService, useValue: service }],
+    }).compile();
+    app = module.createNestApplication();
+    // Stand-in for the auth middleware.
+    app.use((req: any, _res: any, next: () => void) => {
+      req.user = user;
+      next();
+    });
+    await app.init();
+  });
+
+  afterEach(async () => {
+    await app.close();
+    delete process.env.UPLOADS_DIR;
+    fs.rmSync(uploads, { recursive: true, force: true });
+  });
+
+  describe('PATCH /bill/:id', () => {
+    it('parses the multipart body and passes the dto and files to the service', async () => {
+      service.updateWithPhotos.mockResolvedValue({ id: 5, photos: [] });
+      const res = await request(app.getHttpServer())
+        .patch('/bill/5')
+        .field('body', JSON.stringify({ comment: 'hi', removePhotoIds: [3, '4'] }))
+        .attach('files', Buffer.from('one'), 'a.jpg')
+        .attach('files', Buffer.from('two'), 'B.PNG');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ id: 5, photos: [] });
+      expect(service.updateWithPhotos).toHaveBeenCalledTimes(1);
+      const [id, userId, dto, files] = service.updateWithPhotos.mock.calls[0];
+      expect(id).toBe(5);
+      expect(userId).toBe(7);
+      expect(dto.comment).toBe('hi');
+      expect(dto.removePhotoIds).toEqual([3, 4]);
+      expect(files).toHaveLength(2);
+      expect(files.map((f: any) => f.originalname)).toEqual(['a.jpg', 'B.PNG']);
+      expect(uploaded().sort()).toEqual(files.map((f: any) => f.filename).sort());
+    });
+
+    it('accepts a plain JSON body without files', async () => {
+      service.updateWithPhotos.mockResolvedValue({ id: 5 });
+      const res = await request(app.getHttpServer())
+        .patch('/bill/5')
+        .send({ comment: 'json', removePhotoIds: [1], user: { id: 99 } });
+      expect(res.status).toBe(200);
+      const [id, userId, dto, files] = service.updateWithPhotos.mock.calls[0];
+      expect([id, userId]).toEqual([5, 7]);
+      expect(dto.comment).toBe('json');
+      expect(dto.removePhotoIds).toEqual([1]);
+      expect(dto.user).toBeUndefined();
+      expect(files).toEqual([]);
+    });
+
+    it('rejects a .PDF upload with 400 and keeps no file', async () => {
+      const res = await request(app.getHttpServer())
+        .patch('/bill/5')
+        .field('body', '{}')
+        .attach('files', Buffer.from('ok'), 'a.jpg')
+        .attach('files', Buffer.from('%PDF'), 'doc.PDF');
+      expect(res.status).toBe(400);
+      expect(res.body.message).toBe('Photos must be JPG, PNG, GIF or WebP.');
+      expect(service.updateWithPhotos).not.toHaveBeenCalled();
+      expect(uploaded()).toEqual([]);
+    });
+
+    it('rejects an 11 MB file with 413 and keeps no file', async () => {
+      const res = await request(app.getHttpServer())
+        .patch('/bill/5')
+        .field('body', '{}')
+        .attach('files', Buffer.alloc(11 * 1024 * 1024), 'big.jpg');
+      expect(res.status).toBe(413);
+      expect(service.updateWithPhotos).not.toHaveBeenCalled();
+      expect(uploaded()).toEqual([]);
+    });
+
+    it('returns 404 without a request user and deletes the uploads', async () => {
+      user = null;
+      const res = await request(app.getHttpServer())
+        .patch('/bill/5')
+        .field('body', '{}')
+        .attach('files', Buffer.from('one'), 'a.jpg');
+      expect(res.status).toBe(404);
+      expect(service.updateWithPhotos).not.toHaveBeenCalled();
+      expect(uploaded()).toEqual([]);
+    });
+
+    it('rejects an invalid body with 400 and deletes the uploads', async () => {
+      for (const body of ['{not json', JSON.stringify({ removePhotoIds: ['x'] })]) {
+        const res = await request(app.getHttpServer())
+          .patch('/bill/5')
+          .field('body', body)
+          .attach('files', Buffer.from('one'), 'a.jpg');
+        expect(res.status).toBe(400);
+      }
+      expect(service.updateWithPhotos).not.toHaveBeenCalled();
+      expect(uploaded()).toEqual([]);
+    });
+
+    it('rejects a non-numeric id with 400 and deletes the uploads', async () => {
+      const res = await request(app.getHttpServer())
+        .patch('/bill/abc')
+        .field('body', '{}')
+        .attach('files', Buffer.from('one'), 'a.jpg');
+      expect(res.status).toBe(400);
+      expect(service.updateWithPhotos).not.toHaveBeenCalled();
+      expect(uploaded()).toEqual([]);
+    });
+  });
+
+  describe('POST /bill', () => {
+    it('still accepts the mobile request shape, including upper-case extensions', async () => {
+      service.create.mockResolvedValue({ id: 10 });
+      service.addPhoto.mockResolvedValue({});
+      service.getBillById.mockResolvedValue({ id: 10, photos: [{ id: 1 }] });
+      const bill = {
+        date: '2026-10-01T00:00:00.000Z',
+        price: 3.5,
+        shop: { id: 1 },
+        category: { id: 2 },
+      };
+      const res = await request(app.getHttpServer())
+        .post('/bill')
+        .field('body', JSON.stringify(bill))
+        .attach('files', Buffer.from('img'), 'IMG_1.JPG');
+      expect(res.status).toBe(201);
+      expect(res.body).toEqual({ id: 10, photos: [{ id: 1 }] });
+      expect(service.create).toHaveBeenCalledWith(expect.objectContaining({ ...bill, user }));
+      expect(service.addPhoto).toHaveBeenCalledTimes(1);
+      const photo = service.addPhoto.mock.calls[0][0];
+      expect(photo.name).toBe('IMG_1.JPG');
+      expect(photo.path).toMatch(V4_JPG);
+      expect(photo.blurhash).toBe('000000');
+      expect(photo.bill).toEqual({ id: 10 });
+      expect(uploaded()).toEqual([photo.path]);
+      expect(service.getBillById).toHaveBeenCalledWith(10);
+    });
   });
 });

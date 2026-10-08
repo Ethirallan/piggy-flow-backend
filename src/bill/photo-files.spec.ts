@@ -11,6 +11,7 @@ import {
   photoFileFilter,
   photoFilename,
   photoUploadOptions,
+  uploadsDir,
 } from './photo-files';
 
 describe('photo-files', () => {
@@ -71,6 +72,38 @@ describe('photo-files', () => {
       expect(PHOTO_EXTENSIONS).toEqual(['jpg', 'jpeg', 'png', 'gif', 'webp']);
       expect(photoUploadOptions.limits?.fileSize).toBe(MAX_PHOTO_BYTES);
       expect(photoUploadOptions.fileFilter).toBe(photoFileFilter);
+    });
+    it('uploadsDir defaults to ./uploads and honours UPLOADS_DIR', () => {
+      const saved = process.env.UPLOADS_DIR;
+      try {
+        delete process.env.UPLOADS_DIR;
+        expect(uploadsDir()).toBe('./uploads');
+        process.env.UPLOADS_DIR = '/tmp/elsewhere';
+        expect(uploadsDir()).toBe('/tmp/elsewhere');
+      } finally {
+        if (saved === undefined) delete process.env.UPLOADS_DIR;
+        else process.env.UPLOADS_DIR = saved;
+      }
+    });
+    it('storage destination is UPLOADS_DIR, created on demand', async () => {
+      const base = await fs.mkdtemp(path.join(os.tmpdir(), 'dest-'));
+      const dir = path.join(base, 'nested');
+      process.env.UPLOADS_DIR = dir;
+      try {
+        const [err, dest] = await new Promise<any[]>((res) =>
+          (photoUploadOptions.storage as any).getDestination(
+            {},
+            {},
+            (...a: any[]) => res(a),
+          ),
+        );
+        expect(err).toBeNull();
+        expect(dest).toBe(dir);
+        await expect(fs.stat(dir)).resolves.toBeTruthy();
+      } finally {
+        delete process.env.UPLOADS_DIR;
+        await fs.rm(base, { recursive: true, force: true });
+      }
     });
     it('storage filename callback errors for a disallowed extension', () => {
       const cb = jest.fn();

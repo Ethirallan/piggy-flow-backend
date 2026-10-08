@@ -1,20 +1,24 @@
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { DataSource, In } from 'typeorm';
 import { BillService } from './bill.service';
 import { Bill } from './entities/bill.entity';
 import { BillPhoto } from './entities/bill_photo.entity';
-import { deletePhotoFiles } from './photo-files';
+import { deletePhotoFiles, encodeImageToBlurhash } from './photo-files';
 
 jest.mock('./photo-files', () => ({
   ...jest.requireActual('./photo-files'),
   deletePhotoFiles: jest.fn().mockResolvedValue(undefined),
+  encodeImageToBlurhash: jest.fn(),
 }));
 
 describe('BillService', () => {
   let service: BillService;
   let bills: { findOne: jest.Mock; delete: jest.Mock };
   let photos: { count: jest.Mock };
+  let manager: { update: jest.Mock; delete: jest.Mock; insert: jest.Mock };
+  let dataSource: { transaction: jest.Mock };
 
   const bill = (over: any = {}) => ({
     id: 5,
@@ -26,13 +30,25 @@ describe('BillService', () => {
 
   beforeEach(async () => {
     (deletePhotoFiles as jest.Mock).mockClear();
-    bills = { findOne: jest.fn(), delete: jest.fn().mockResolvedValue({ affected: 1 }) };
+    (encodeImageToBlurhash as jest.Mock).mockReset();
+    bills = {
+      findOne: jest.fn(),
+      findOneOrFail: jest.fn(),
+      delete: jest.fn().mockResolvedValue({ affected: 1 }),
+    } as any;
     photos = { count: jest.fn() };
+    manager = {
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+      delete: jest.fn().mockResolvedValue({ affected: 1 }),
+      insert: jest.fn().mockResolvedValue({}),
+    };
+    dataSource = { transaction: jest.fn((cb) => cb(manager)) };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         BillService,
         { provide: getRepositoryToken(Bill), useValue: bills },
         { provide: getRepositoryToken(BillPhoto), useValue: photos },
+        { provide: DataSource, useValue: dataSource },
       ],
     }).compile();
     service = module.get<BillService>(BillService);
@@ -119,6 +135,134 @@ describe('BillService', () => {
       bills.delete.mockRejectedValue(new Error('db'));
       await expect(service.removeOwned(5, 1)).rejects.toThrow('db');
       expect(deletePhotoFiles).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('updateWithPhotos', () => {
+    const file = (filename: string, originalname = 'IMG_1.JPG') =>
+      ({ filename, originalname, path: `uploads/${filename}` } as Express.Multer.File);
+    const fresh = { id: 5, photos: [] };
+
+    beforeEach(() => {
+      bills.findOne.mockResolvedValue(bill());
+      (bills as any).findOneOrFail.mockResolvedValue(fresh);
+      (encodeImageToBlurhash as jest.Mock).mockResolvedValue('LKO2?U%2Tw=w');
+    });
+
+    const deleteCalls = () => (deletePhotoFiles as jest.Mock).mock.calls;
+
+    it('removes a photo row in the transaction, then deletes its file', async () => {
+      await expect(service.updateWithPhotos(5, 1, { removePhotoIds: [2] }, [])).resolves.toBe(
+        fresh,
+      );
+      expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+      expect(manager.delete).toHaveBeenCalledWith(BillPhoto, { id: In([2]), bill: { id: 5 } });
+      expect(manager.insert).not.toHaveBeenCalled();
+      expect(manager.update).not.toHaveBeenCalled();
+      expect(deleteCalls()).toHaveLength(1);
+      const [paths, isReferenced] = deleteCalls()[0];
+      expect(paths).toEqual(['b.png']);
+      photos.count.mockResolvedValue(1);
+      await expect(isReferenced('b.png')).resolves.toBe(true);
+      expect(photos.count).toHaveBeenCalledWith({ where: { path: 'b.png' } });
+      expect(manager.delete.mock.invocationCallOrder[0]).toBeLessThan(
+        (deletePhotoFiles as jest.Mock).mock.invocationCallOrder[0],
+      );
+      expect((bills as any).findOneOrFail).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 5 } }),
+      );
+    });
+
+    it('inserts rows for new files with their blurhash', async () => {
+      (encodeImageToBlurhash as jest.Mock)
+        .mockResolvedValueOnce('hash1')
+        .mockRejectedValueOnce(new Error('bad image'));
+      const files = [file('n1.jpg'), file('n2.png', 'b.PNG')];
+      await expect(service.updateWithPhotos(5, 2, {}, files)).resolves.toBe(fresh);
+      expect(encodeImageToBlurhash).toHaveBeenCalledWith('uploads/n1.jpg');
+      expect(manager.insert).toHaveBeenCalledWith(BillPhoto, [
+        { name: 'IMG_1.JPG', path: 'n1.jpg', blurhash: 'hash1', bill: { id: 5 } },
+        { name: 'b.PNG', path: 'n2.png', blurhash: '000000', bill: { id: 5 } },
+      ]);
+      expect(manager.delete).not.toHaveBeenCalled();
+      // Blurhashes are computed before the transaction opens.
+      expect((encodeImageToBlurhash as jest.Mock).mock.invocationCallOrder[1]).toBeLessThan(
+        dataSource.transaction.mock.invocationCallOrder[0],
+      );
+      // Nothing was removed, so no removed-file cleanup deletes anything.
+      for (const [paths] of deleteCalls()) expect(paths).toEqual([]);
+    });
+
+    it('adds, removes and updates fields together in one transaction', async () => {
+      const dto = {
+        comment: 'new',
+        price: 12.5,
+        removePhotoIds: [1, 2],
+        user: { id: 99 },
+        id: 77,
+      } as any;
+      await service.updateWithPhotos(5, 1, dto, [file('n1.jpg')]);
+      expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+      expect(manager.update).toHaveBeenCalledWith(Bill, 5, { comment: 'new', price: 12.5 });
+      expect(manager.delete).toHaveBeenCalledWith(BillPhoto, {
+        id: In([1, 2]),
+        bill: { id: 5 },
+      });
+      expect(manager.insert).toHaveBeenCalledWith(BillPhoto, [
+        expect.objectContaining({ path: 'n1.jpg', bill: { id: 5 } }),
+      ]);
+      const removed = deleteCalls().find(([paths]) => paths.length > 0);
+      expect(removed[0]).toEqual(['a.jpg', 'b.png']);
+      expect(deleteCalls().flatMap(([paths]) => paths)).not.toContain('n1.jpg');
+    });
+
+    it('rejects an unknown photo id with 400 and deletes the new files', async () => {
+      await expect(
+        service.updateWithPhotos(5, 1, { removePhotoIds: [2, 42] }, [file('n1.jpg')]),
+      ).rejects.toEqual(new BadRequestException('Unknown photo.'));
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(deleteCalls()).toHaveLength(1);
+      const [paths, isReferenced] = deleteCalls()[0];
+      expect(paths).toEqual(['n1.jpg']);
+      await expect(isReferenced('n1.jpg')).resolves.toBe(false);
+    });
+
+    it('returns 404 for a stranger and deletes the new files', async () => {
+      await expect(
+        service.updateWithPhotos(5, 3, { removePhotoIds: [1] }, [file('n1.jpg'), file('n2.jpg')]),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(deleteCalls()).toHaveLength(1);
+      expect(deleteCalls()[0][0]).toEqual(['n1.jpg', 'n2.jpg']);
+    });
+
+    it('when the transaction fails, deletes only the new files and rethrows', async () => {
+      const failure = new Error('db down');
+      manager.insert.mockRejectedValue(failure);
+      await expect(
+        service.updateWithPhotos(5, 1, { removePhotoIds: [1, 2] }, [file('n1.jpg')]),
+      ).rejects.toBe(failure);
+      const all = deleteCalls().flatMap(([paths]) => paths);
+      expect(all).toEqual(['n1.jpg']);
+      expect(all).not.toContain('a.jpg');
+      expect(all).not.toContain('b.png');
+      expect((bills as any).findOneOrFail).not.toHaveBeenCalled();
+    });
+
+    it('does not delete removed files when the transaction itself rejects', async () => {
+      dataSource.transaction.mockRejectedValue(new Error('commit failed'));
+      await expect(
+        service.updateWithPhotos(5, 1, { removePhotoIds: [1] }, []),
+      ).rejects.toThrow('commit failed');
+      expect(deleteCalls().flatMap(([paths]) => paths)).not.toContain('a.jpg');
+    });
+
+    it('keeps the new files once committed, even if reloading the bill fails', async () => {
+      (bills as any).findOneOrFail.mockRejectedValue(new Error('gone'));
+      await expect(service.updateWithPhotos(5, 1, {}, [file('n1.jpg')])).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(deleteCalls().flatMap(([paths]) => paths)).not.toContain('n1.jpg');
     });
   });
 });
