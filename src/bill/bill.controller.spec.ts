@@ -188,6 +188,34 @@ describe('BillController (HTTP)', () => {
   });
 
   describe('POST /bill', () => {
+    it('skips a disallowed file instead of rejecting, as before', async () => {
+      service.create.mockResolvedValue({ id: 11 });
+      service.addPhoto.mockResolvedValue({});
+      service.getBillById.mockResolvedValue({ id: 11 });
+      const res = await request(app.getHttpServer())
+        .post('/bill')
+        .field('body', JSON.stringify({ price: 1 }))
+        .attach('files', Buffer.from('%PDF'), 'doc.PDF')
+        .attach('files', Buffer.from('img'), 'IMG_1.JPG');
+      expect(res.status).toBe(201);
+      expect(service.create).toHaveBeenCalledTimes(1);
+      expect(service.addPhoto).toHaveBeenCalledTimes(1);
+      const photo = service.addPhoto.mock.calls[0][0];
+      expect(photo.name).toBe('IMG_1.JPG');
+      expect(photo.path).toMatch(V4_JPG);
+      expect(uploaded()).toEqual([photo.path]);
+    });
+
+    it('still rejects an 11 MB file with 413 and keeps no file', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/bill')
+        .field('body', '{}')
+        .attach('files', Buffer.alloc(11 * 1024 * 1024), 'big.jpg');
+      expect(res.status).toBe(413);
+      expect(service.create).not.toHaveBeenCalled();
+      expect(uploaded()).toEqual([]);
+    });
+
     it('still accepts the mobile request shape, including upper-case extensions', async () => {
       service.create.mockResolvedValue({ id: 10 });
       service.addPhoto.mockResolvedValue({});

@@ -138,7 +138,8 @@ export class BillService {
         let blurhash: string;
         try {
           blurhash = await encodeImageToBlurhash(file.path);
-        } catch {
+        } catch (e) {
+          console.warn(`Blurhash failed for ${file.filename}:`, e);
           blurhash = '000000';
         }
         rows.push({
@@ -161,9 +162,13 @@ export class BillService {
         }
       });
     } catch (e) {
-      // Nothing was committed: the new files are unreferenced. The removed
-      // photos' rows still exist, so their files are left alone.
-      await deletePhotoFiles(newPaths, async () => false);
+      // Usually nothing was committed, but transaction() can also reject
+      // after a successful COMMIT (dropped connection, release() failing), so
+      // a new file is deleted only if no row references it. The removed
+      // photos' files are never touched here.
+      await deletePhotoFiles(newPaths, (path) =>
+        this.isPhotoPathReferenced(path),
+      );
       throw e;
     }
 

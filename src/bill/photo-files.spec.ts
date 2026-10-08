@@ -10,6 +10,7 @@ import {
   photoExtension,
   photoFileFilter,
   photoFilename,
+  photoCreateUploadOptions,
   photoUploadOptions,
   uploadsDir,
 } from './photo-files';
@@ -72,6 +73,25 @@ describe('photo-files', () => {
       expect(PHOTO_EXTENSIONS).toEqual(['jpg', 'jpeg', 'png', 'gif', 'webp']);
       expect(photoUploadOptions.limits?.fileSize).toBe(MAX_PHOTO_BYTES);
       expect(photoUploadOptions.fileFilter).toBe(photoFileFilter);
+    });
+    it('create options share storage and limits but skip disallowed files', () => {
+      expect(photoCreateUploadOptions.storage).toBe(photoUploadOptions.storage);
+      expect(photoCreateUploadOptions.limits).toBe(photoUploadOptions.limits);
+      const cb = jest.fn();
+      photoCreateUploadOptions.fileFilter(
+        {} as any,
+        { originalname: 'a.HEIC' } as any,
+        cb,
+      );
+      photoCreateUploadOptions.fileFilter(
+        {} as any,
+        { originalname: 'IMG.JPG' } as any,
+        cb,
+      );
+      expect(cb.mock.calls).toEqual([
+        [null, false],
+        [null, true],
+      ]);
     });
     it('uploadsDir defaults to ./uploads and honours UPLOADS_DIR', () => {
       const saved = process.env.UPLOADS_DIR;

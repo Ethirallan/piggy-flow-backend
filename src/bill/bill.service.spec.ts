@@ -1,6 +1,9 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as nodePath from 'node:path';
 import { DataSource, In } from 'typeorm';
 import { BillService } from './bill.service';
 import { Bill } from './entities/bill.entity';
@@ -239,6 +242,7 @@ describe('BillService', () => {
     it('when the transaction fails, deletes only the new files and rethrows', async () => {
       const failure = new Error('db down');
       manager.insert.mockRejectedValue(failure);
+      photos.count.mockResolvedValue(0);
       await expect(
         service.updateWithPhotos(5, 1, { removePhotoIds: [1, 2] }, [file('n1.jpg')]),
       ).rejects.toBe(failure);
@@ -246,7 +250,37 @@ describe('BillService', () => {
       expect(all).toEqual(['n1.jpg']);
       expect(all).not.toContain('a.jpg');
       expect(all).not.toContain('b.png');
+      // The cleanup still checks the DB: an unreferenced new file is deletable.
+      const [, isReferenced] = deleteCalls()[0];
+      await expect(isReferenced('n1.jpg')).resolves.toBe(false);
+      expect(photos.count).toHaveBeenCalledWith({ where: { path: 'n1.jpg' } });
       expect((bills as any).findOneOrFail).not.toHaveBeenCalled();
+    });
+
+    it('keeps new files whose rows were committed even though transaction() rejected', async () => {
+      // e.g. the connection drops after COMMIT, or release() throws.
+      dataSource.transaction.mockImplementation(async (cb) => {
+        await cb(manager);
+        throw new Error('release failed');
+      });
+      photos.count.mockResolvedValue(1);
+      await expect(service.updateWithPhotos(5, 1, {}, [file('n1.jpg')])).rejects.toThrow(
+        'release failed',
+      );
+      expect(deleteCalls()).toHaveLength(1);
+      const [paths, isReferenced] = deleteCalls()[0];
+      expect(paths).toEqual(['n1.jpg']);
+
+      // Run the real deletion with the predicate the service passed.
+      const root = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'committed-'));
+      try {
+        fs.writeFileSync(nodePath.join(root, 'n1.jpg'), 'x');
+        const real = jest.requireActual('./photo-files').deletePhotoFiles;
+        await real(paths, isReferenced, root, () => undefined);
+        expect(fs.existsSync(nodePath.join(root, 'n1.jpg'))).toBe(true);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
     });
 
     it('does not delete removed files when the transaction itself rejects', async () => {

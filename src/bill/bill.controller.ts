@@ -23,6 +23,7 @@ import { CreateBillPhotoDto } from './dto/create-bill-photo.dto';
 import {
   deletePhotoFiles,
   encodeImageToBlurhash,
+  photoCreateUploadOptions,
   photoUploadOptions,
   uploadsDir,
 } from './photo-files';
@@ -100,7 +101,7 @@ export class BillController {
   }
 
   @Post()
-  @UseInterceptors(FilesInterceptor('files', null, photoUploadOptions))
+  @UseInterceptors(FilesInterceptor('files', null, photoCreateUploadOptions))
   async addNewBill(
     @Body() data: any,
     @Req() req: any,
@@ -121,7 +122,8 @@ export class BillController {
         newPhoto.path = file.filename;
         try {
           newPhoto.blurhash = await encodeImageToBlurhash(file.path);
-        } catch {
+        } catch (e) {
+          console.warn(`Blurhash failed for ${file.filename}:`, e);
           newPhoto.blurhash = '000000';
         }
         newPhoto.bill = bill;

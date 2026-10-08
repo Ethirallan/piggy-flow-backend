@@ -81,6 +81,17 @@ export const photoUploadOptions: MulterOptions = {
   limits: { fileSize: MAX_PHOTO_BYTES },
 };
 
+/**
+ * Upload options for `POST /bill`. Same storage and size limit as
+ * `photoUploadOptions`, but a disallowed file is skipped instead of failing
+ * the request, as the mobile app has always relied on.
+ */
+export const photoCreateUploadOptions: MulterOptions = {
+  ...photoUploadOptions,
+  fileFilter: (req, file, cb) =>
+    cb(null, photoExtension(file.originalname) !== null),
+};
+
 export async function deletePhotoFiles(
   paths: string[],
   isReferenced: (path: string) => Promise<boolean>,
