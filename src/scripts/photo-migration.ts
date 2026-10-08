@@ -79,14 +79,29 @@ export type Summary = {
   invalid: PlanItem[];
   /** Rows whose path changed between planning and update; their copy was removed. */
   skipped: PlanItem[];
+  /**
+   * Copies left on disk because `setPath` threw and the row could not be
+   * confirmed to point at them. Never deleted automatically.
+   */
+  orphanCopies: string[];
   logFile: string;
 };
+
+/** Thrown when a run stops early; carries what was done so far. */
+export class MigrationRunError extends Error {
+  constructor(message: string, readonly summary: Summary) {
+    super(message);
+    this.name = 'MigrationRunError';
+  }
+}
 
 export type VerifyResult = {
   ok: boolean;
   problems: string[];
   /** Rows with a never-migrated (non-random) path whose file is missing. */
   missingBeforeMigration: string[];
+  /** Rows with a valid, not-yet-random path. Cleanup waits for a rerun. */
+  unmigrated: string[];
   unreferencedFiles: string[];
 };
 
@@ -229,6 +244,23 @@ async function fsyncFile(abs: string): Promise<void> {
   }
 }
 
+/** Best effort: makes the new directory entry durable. Never fails. */
+async function fsyncDir(dir: string): Promise<void> {
+  let h: FileHandle | null = null;
+  try {
+    h = await open(dir, 'r');
+    await h.sync();
+  } catch (e) {
+    console.warn(
+      `Could not fsync directory ${dir}: ${(e as Error)?.message ?? e}`,
+    );
+  } finally {
+    await h?.close().catch(() => undefined);
+  }
+}
+
+const errorText = (e: unknown) => (e as Error)?.message ?? String(e);
+
 /** Removes a copy this run created. Never called for originals. */
 async function removeOwnCopy(abs: string): Promise<void> {
   try {
@@ -244,8 +276,15 @@ async function removeOwnCopy(abs: string): Promise<void> {
 
 /**
  * Migrates every `migrate` row, one at a time:
- * copy (exclusive) → compare sizes → fsync copy → conditional DB update →
- * append + fsync a log line. Never unlinks an original.
+ * copy (exclusive) → compare sizes → fsync copy and dir → conditional DB
+ * update → append + fsync a log line. Never unlinks an original.
+ *
+ * A copy is removed only when no row can reference it: a failed or
+ * mismatched copy, or a conditional update that matched no row. When the
+ * update throws, it may still have committed, so the copy is kept: the row is
+ * re-read and either logged as migrated or the copy is reported as an orphan.
+ *
+ * Stopping early throws a `MigrationRunError` carrying the partial summary.
  */
 export async function runMigration(
   store: PhotoStore,
@@ -261,23 +300,44 @@ export async function runMigration(
     missing: plan.filter((p) => p.status === 'missing-file'),
     invalid: plan.filter((p) => p.status === 'invalid-path'),
     skipped: [],
+    orphanCopies: [],
     logFile,
   };
 
   let log: FileHandle | null = null;
+  const appendLog = async (entry: LogEntry) => {
+    if (!log) {
+      await mkdir(dirname(logFile), { recursive: true });
+      log = await open(logFile, 'a');
+    }
+    await log.write(JSON.stringify(entry) + '\n');
+    await log.sync();
+    summary.migrated++;
+  };
+
   try {
     for (const item of plan) {
       if (item.status !== 'migrate') continue;
+      const newPath = item.newPath as string;
       const src = insideRoot(root, item.oldPath);
-      const dst = insideRoot(root, item.newPath!);
+      const dst = insideRoot(root, newPath);
       if (!src || !dst) throw new Error(`Unsafe path for row ${item.rowId}`);
+      const vanished = () =>
+        summary.missing.push({
+          ...item,
+          newPath: null,
+          status: 'missing-file',
+        });
 
       // 1. Copy, never overwriting. On EEXIST the file isn't ours: leave it.
       try {
         await copy(src, dst);
       } catch (e) {
-        if ((e as NodeJS.ErrnoException)?.code !== 'EEXIST') {
-          await removeOwnCopy(dst);
+        if ((e as NodeJS.ErrnoException)?.code === 'EEXIST') throw e;
+        await removeOwnCopy(dst);
+        if ((await regularFileSize(src)) === null) {
+          vanished(); // the original disappeared since planning
+          continue;
         }
         throw e;
       }
@@ -287,45 +347,76 @@ export async function runMigration(
         regularFileSize(src),
         regularFileSize(dst),
       ]);
-      if (srcSize === null || dstSize === null || srcSize !== dstSize) {
+      if (srcSize === null) {
+        await removeOwnCopy(dst);
+        vanished();
+        continue;
+      }
+      if (dstSize === null || srcSize !== dstSize) {
         await removeOwnCopy(dst);
         throw new Error(
           `Size mismatch copying row ${item.rowId} (${item.oldPath}: ${srcSize}, copy: ${dstSize}); stopped.`,
         );
       }
       await fsyncFile(dst);
+      await fsyncDir(root);
+
+      const entry: LogEntry = {
+        rowId: item.rowId,
+        oldPath: item.oldPath,
+        newPath,
+        size: dstSize,
+      };
 
       // 3. Point that row (only) at the copy.
       let updated: boolean;
       try {
-        updated = await store.setPath(item.rowId, item.oldPath, item.newPath!);
+        updated = await store.setPath(item.rowId, item.oldPath, newPath);
       } catch (e) {
-        await removeOwnCopy(dst);
-        throw e;
+        // The UPDATE may have committed before the error surfaced: never
+        // delete the copy here. Re-read the row to find out.
+        let current: string | undefined;
+        try {
+          current = (await store.list()).find((r) => r.id === item.rowId)?.path;
+        } catch {
+          current = undefined;
+        }
+        const what = `setPath failed for row ${item.rowId} (${
+          item.oldPath
+        } -> ${newPath}): ${errorText(e)}`;
+        if (current === newPath) {
+          try {
+            await appendLog(entry);
+          } catch (logErr) {
+            throw new Error(
+              `${what}. The update had committed, but logging it failed (${errorText(
+                logErr,
+              )}); the row is migrated without a log line. Stopped.`,
+            );
+          }
+          throw new Error(
+            `${what}. The update had committed; the row is migrated and logged. Stopped.`,
+          );
+        }
+        summary.orphanCopies.push(newPath);
+        throw new Error(
+          `${what}. Could not confirm the update; the copy ${newPath} was left in place as an orphan. Stopped.`,
+        );
       }
       if (!updated) {
+        // The conditional UPDATE matched no row, so nothing references the copy.
         await removeOwnCopy(dst);
         summary.skipped.push(item);
         continue;
       }
 
       // 4. Log and flush.
-      if (!log) {
-        await mkdir(dirname(logFile), { recursive: true });
-        log = await open(logFile, 'a');
-      }
-      const entry: LogEntry = {
-        rowId: item.rowId,
-        oldPath: item.oldPath,
-        newPath: item.newPath!,
-        size: dstSize,
-      };
-      await log.write(JSON.stringify(entry) + '\n');
-      await log.sync();
-      summary.migrated++;
+      await appendLog(entry);
     }
+  } catch (e) {
+    throw new MigrationRunError(errorText(e), summary);
   } finally {
-    if (log) await log.close();
+    if (log) await (log as FileHandle).close();
   }
   return summary;
 }
@@ -384,6 +475,7 @@ export async function verify(
 ): Promise<VerifyResult> {
   const { entries, problems } = await readLogs(logFiles);
   const missingBeforeMigration: string[] = [];
+  const unmigrated: string[] = [];
   const byNewPath = new Map<string, LogEntry>();
   for (const e of entries) byNewPath.set(e.newPath, e);
 
@@ -393,6 +485,9 @@ export async function verify(
     if (!abs) {
       problems.push(`row ${row.id}: invalid path ${JSON.stringify(row.path)}`);
       continue;
+    }
+    if (!isRandomPhotoName(row.path)) {
+      unmigrated.push(`row ${row.id}: ${row.path} is not migrated yet`);
     }
     const size = await regularFileSize(abs);
     const logged = byNewPath.get(row.path);
@@ -439,9 +534,13 @@ export async function verify(
   unreferencedFiles.sort();
 
   return {
-    ok: problems.length === 0 && missingBeforeMigration.length === 0,
+    ok:
+      problems.length === 0 &&
+      missingBeforeMigration.length === 0 &&
+      unmigrated.length === 0,
     problems,
     missingBeforeMigration,
+    unmigrated,
     unreferencedFiles,
   };
 }
@@ -469,12 +568,23 @@ export async function cleanup(
   const check = await verify(store, root, logFiles);
   if (!check.ok) {
     result.refused = true;
-    result.reasons = [...check.problems, ...check.missingBeforeMigration];
+    result.reasons = [
+      ...check.problems,
+      ...check.missingBeforeMigration,
+      ...check.unmigrated,
+    ];
     return result;
   }
 
   const { entries } = await readLogs(logFiles);
   const candidates = [...new Set(entries.map((e) => e.oldPath))];
+  const newPathsFor = new Map<string, string[]>();
+  for (const e of entries) {
+    newPathsFor.set(e.oldPath, [
+      ...(newPathsFor.get(e.oldPath) ?? []),
+      e.newPath,
+    ]);
+  }
   // Fresh read right before deciding, after verify.
   const rows = await store.list();
   const referenced = new Set(rows.map((r) => r.path.toLowerCase()));
@@ -490,8 +600,22 @@ export async function cleanup(
       keep('dotfiles are never deleted');
       continue;
     }
+    if (isRandomPhotoName(p)) {
+      keep('random (already migrated) name; never an old file');
+      continue;
+    }
     if (referenced.has(p.toLowerCase())) {
       keep('still referenced by a row');
+      continue;
+    }
+    // Every copy logged for this old file must still exist in uploads.
+    let copiesExist = true;
+    for (const n of newPathsFor.get(p) ?? []) {
+      const nAbs = insideRoot(root, n);
+      if (!nAbs || (await regularFileSize(nAbs)) === null) copiesExist = false;
+    }
+    if (!copiesExist) {
+      keep('a logged new file for it is missing from uploads');
       continue;
     }
     let isFile = false;

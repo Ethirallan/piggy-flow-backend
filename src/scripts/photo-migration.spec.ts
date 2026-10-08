@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { isRandomPhotoName } from '../bill/photo-files';
 import {
+  MigrationRunError,
   PhotoRow,
   PhotoStore,
   cleanup,
@@ -15,13 +16,17 @@ import {
 
 class MemStore implements PhotoStore {
   rows: PhotoRow[];
-  onSetPath?: (id: number) => 'throw' | 'changed' | void;
+  onSetPath?: (id: number) => 'throw' | 'commit-then-throw' | 'changed' | void;
+  /** Called before every list(), with the 1-based call number. */
+  onList?: (call: number) => void;
+  listCalls = 0;
 
   constructor(rows: PhotoRow[]) {
     this.rows = rows.map((r) => ({ ...r }));
   }
 
   async list(): Promise<PhotoRow[]> {
+    this.onList?.(++this.listCalls);
     return this.rows.map((r) => ({ ...r }));
   }
 
@@ -32,6 +37,9 @@ class MemStore implements PhotoStore {
     const row = this.rows.find((r) => r.id === id);
     if (!row || row.path !== expectedOldPath) return false;
     row.path = newPath;
+    if (hook === 'commit-then-throw') {
+      throw new Error(`connection reset after commit on row ${id}`);
+    }
     return true;
   }
 
@@ -222,9 +230,18 @@ describe('runMigration', () => {
     ]);
     store.onSetPath = (id) => (id === 2 ? 'throw' : undefined);
 
-    await expect(runMigration(store, root, logPath('1.jsonl'))).rejects.toThrow(
-      'db down on row 2',
+    const err = await runMigration(store, root, logPath('1.jsonl')).catch(
+      (e) => e,
     );
+    expect(err).toBeInstanceOf(MigrationRunError);
+    expect(err.message).toContain('db down on row 2');
+    const orphan: string = err.summary.orphanCopies[0];
+    expect(err.summary.orphanCopies).toHaveLength(1);
+    expect(err.message).toMatch(/row 2/);
+    expect(err.message).toContain('b.jpg');
+    expect(err.message).toContain(orphan);
+    expect(err.summary.migrated).toBe(1);
+    expect(err.summary.logFile).toBe(logPath('1.jsonl'));
 
     const first = store.pathOf(1);
     expect(isRandomPhotoName(first)).toBe(true);
@@ -233,9 +250,10 @@ describe('runMigration', () => {
     expect(await readLog(logPath('1.jsonl'))).toEqual([
       { rowId: 1, oldPath: 'a.jpg', newPath: first, size: 3 },
     ]);
-    // The copy made for row 2 was removed; its original stays.
+    // The copy made for row 2 is never deleted after a throw (the UPDATE
+    // might have committed); it's left as a reported orphan.
     expect(Object.keys(await snapshot(root)).sort()).toEqual(
-      ['.migration/1.jsonl', 'a.jpg', 'b.jpg', 'c.jpg', first].sort(),
+      ['.migration/1.jsonl', 'a.jpg', 'b.jpg', 'c.jpg', first, orphan].sort(),
     );
 
     store.onSetPath = undefined;
@@ -249,10 +267,82 @@ describe('runMigration', () => {
     const files = Object.keys(await snapshot(root)).filter(
       (f) => !f.startsWith('.migration'),
     );
-    // 3 originals + exactly one copy per row.
-    expect(files).toHaveLength(6);
+    // 3 originals + exactly one copy per row + the reported orphan.
+    expect(files).toHaveLength(7);
+    expect(files).toContain(orphan);
     expect(await read(store.pathOf(2))).toBe('bbbb');
     expect(await read(store.pathOf(3))).toBe('ccccc');
+  });
+
+  it('keeps the copy and logs the row when setPath throws after committing', async () => {
+    await write('a.jpg', 'aaa');
+    await write('b.jpg', 'bbb');
+    const store = new MemStore([
+      { id: 1, path: 'a.jpg' },
+      { id: 2, path: 'b.jpg' },
+    ]);
+    store.onSetPath = (id) => (id === 1 ? 'commit-then-throw' : undefined);
+
+    const err = await runMigration(store, root, logPath()).catch((e) => e);
+
+    expect(err).toBeInstanceOf(MigrationRunError);
+    const newPath = store.pathOf(1);
+    expect(isRandomPhotoName(newPath)).toBe(true);
+    expect(err.message).toMatch(/row 1\b/);
+    expect(err.message).toContain('a.jpg');
+    expect(err.message).toContain(newPath);
+    expect(await read(newPath)).toBe('aaa');
+    expect(await read('a.jpg')).toBe('aaa');
+    expect(await readLog(logPath())).toEqual([
+      { rowId: 1, oldPath: 'a.jpg', newPath, size: 3 },
+    ]);
+    expect(err.summary.migrated).toBe(1);
+    expect(err.summary.orphanCopies).toEqual([]);
+    // The run stopped: row 2 was not attempted.
+    expect(store.pathOf(2)).toBe('b.jpg');
+  });
+
+  it('leaves the copy as an orphan when the re-read after a throw fails', async () => {
+    await write('a.jpg', 'aaa');
+    const store = new MemStore([{ id: 1, path: 'a.jpg' }]);
+    store.onSetPath = () => 'throw';
+    store.onList = (n) => {
+      if (n > 1) throw new Error('still down');
+    };
+
+    const err = await runMigration(store, root, logPath()).catch((e) => e);
+
+    expect(err).toBeInstanceOf(MigrationRunError);
+    const orphan = err.summary.orphanCopies[0];
+    expect(isRandomPhotoName(orphan)).toBe(true);
+    expect(await read(orphan)).toBe('aaa');
+    expect(store.pathOf(1)).toBe('a.jpg');
+    expect(await exists(logPath())).toBe(false);
+  });
+
+  it('reports a source that vanished before its copy as missing and continues', async () => {
+    await write('a.jpg', 'aaa');
+    await write('b.jpg', 'bbb');
+    const store = new MemStore([
+      { id: 1, path: 'a.jpg' },
+      { id: 2, path: 'b.jpg' },
+    ]);
+
+    const summary = await runMigration(store, root, logPath(), {
+      copy: async (src, dst) => {
+        if (src.endsWith('a.jpg')) await fs.unlink(src);
+        await fs.copyFile(src, dst, fs.constants.COPYFILE_EXCL);
+      },
+    });
+
+    expect(summary.missing.map((m) => [m.rowId, m.status])).toEqual([
+      [1, 'missing-file'],
+    ]);
+    expect(summary.migrated).toBe(1);
+    expect(store.pathOf(1)).toBe('a.jpg');
+    expect(Object.keys(await snapshot(root)).sort()).toEqual(
+      ['.migration/photos-test.jsonl', 'b.jpg', store.pathOf(2)].sort(),
+    );
   });
 
   it('deletes its copy and skips the row when the row changed meanwhile', async () => {
@@ -383,6 +473,22 @@ describe('verify', () => {
     expect(result.problems.join('\n')).toMatch(/row 2.*a\/b\.jpg/);
   });
 
+  it('lists unmigrated rows and is not ok until they are migrated', async () => {
+    await write('a.jpg', 'aaa');
+    await write(`${V4}.jpg`, 'bbb');
+    const store = new MemStore([
+      { id: 1, path: 'a.jpg' },
+      { id: 2, path: `${V4}.jpg` },
+      { id: 3, path: '../x.jpg' },
+    ]);
+
+    const result = await verify(store, root, []);
+
+    expect(result.ok).toBe(false);
+    expect(result.unmigrated).toEqual([expect.stringMatching(/row 1.*a\.jpg/)]);
+    expect(result.problems.join('\n')).toMatch(/row 3/);
+  });
+
   it('treats a migrated row whose log line was lost as healthy', async () => {
     await write(`${V4}.jpg`, 'copied');
     await write('old.jpg', 'copied');
@@ -442,7 +548,11 @@ describe('cleanup', () => {
 
   it('keeps a logged old file that a row still references', async () => {
     const store = await migrated();
-    store.rows.push({ id: 3, path: 'a.jpg' });
+    // A row appears between verify's read and cleanup's own fresh read.
+    const calls = store.listCalls;
+    store.onList = (n) => {
+      if (n === calls + 2) store.rows.push({ id: 3, path: 'a.jpg' });
+    };
 
     const result = await cleanup(store, root, [logPath()], { dryRun: false });
 
@@ -455,13 +565,74 @@ describe('cleanup', () => {
 
   it('treats a case-insensitive match as still referenced', async () => {
     const store = await migrated();
-    await write('A.JPG', 'other');
-    store.rows.push({ id: 3, path: 'A.JPG' });
+    const calls = store.listCalls;
+    store.onList = (n) => {
+      if (n === calls + 2) store.rows.push({ id: 3, path: 'A.JPG' });
+    };
 
     const result = await cleanup(store, root, [logPath()], { dryRun: false });
 
     expect(result.deleted).toEqual(['b.jpg']);
     expect(await exists(path.join(root, 'a.jpg'))).toBe(true);
+  });
+
+  it('refuses while any row is still unmigrated', async () => {
+    const store = await migrated();
+    store.rows.push({ id: 3, path: 'a.jpg' });
+    const before = await snapshot(root);
+
+    const result = await cleanup(store, root, [logPath()], { dryRun: false });
+
+    expect(result.refused).toBe(true);
+    expect(result.reasons.join('\n')).toMatch(/row 3/);
+    expect(await snapshot(root)).toEqual(before);
+  });
+
+  it('never deletes a random-named oldPath', async () => {
+    const store = new MemStore([]);
+    await write(`${V4}.jpg`, 'random');
+    await write('copy.jpg', 'random');
+    await fs.mkdir(path.join(root, '.migration'));
+    await fs.writeFile(
+      logPath(),
+      JSON.stringify({
+        rowId: 1,
+        oldPath: `${V4}.jpg`,
+        newPath: 'copy.jpg',
+        size: 6,
+      }) + '\n',
+    );
+
+    const result = await cleanup(store, root, [logPath()], { dryRun: false });
+
+    expect(result.deleted).toEqual([]);
+    expect(result.kept).toEqual([
+      { path: `${V4}.jpg`, reason: expect.stringMatching(/random/) },
+    ]);
+    expect(await read(`${V4}.jpg`)).toBe('random');
+  });
+
+  it('keeps an oldPath whose logged newPath file is gone', async () => {
+    const store = new MemStore([]);
+    await write('old.jpg', 'old');
+    await fs.mkdir(path.join(root, '.migration'));
+    await fs.writeFile(
+      logPath(),
+      JSON.stringify({
+        rowId: 1,
+        oldPath: 'old.jpg',
+        newPath: `${V4}.jpg`,
+        size: 3,
+      }) + '\n',
+    );
+
+    const result = await cleanup(store, root, [logPath()], { dryRun: false });
+
+    expect(result.deleted).toEqual([]);
+    expect(result.kept).toEqual([
+      { path: 'old.jpg', reason: expect.stringMatching(/new file/) },
+    ]);
+    expect(await read('old.jpg')).toBe('old');
   });
 
   it('refuses and deletes nothing when verify fails', async () => {

@@ -1,3 +1,6 @@
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { backupInstructions, parseArgs } from './migrate-photos';
 
 describe('migrate-photos CLI arguments', () => {
@@ -40,11 +43,42 @@ describe('migrate-photos CLI arguments', () => {
     expect(() => parseArgs(['--run', '--log', 'a.jsonl'])).toThrow();
   });
 
-  it('prints mysqldump and uploads copy commands', () => {
-    const text = backupInstructions('./uploads');
-    expect(text).toMatch(/mysqldump .* > piggy-flow-\d{4}-\d{2}-\d{2}\.sql/);
-    expect(text).toMatch(
-      /cp -a \.\/uploads \.\/uploads-backup-\d{4}-\d{2}-\d{2}/,
-    );
+  describe('backup instructions', () => {
+    let base: string;
+    beforeEach(async () => {
+      base = await fs.realpath(
+        await fs.mkdtemp(path.join(os.tmpdir(), 'photo-bak-')),
+      );
+    });
+    afterEach(() => fs.rm(base, { recursive: true, force: true }));
+
+    it('prints mysqldump and a copy of the real uploads dir', async () => {
+      await fs.mkdir(path.join(base, 'uploads'));
+      const text = await backupInstructions(path.join(base, 'uploads'));
+      expect(text).toMatch(/mysqldump .* > piggy-flow-\d{4}-\d{2}-\d{2}\.sql/);
+      const date = text.match(/piggy-flow-(\d{4}-\d{2}-\d{2})\.sql/)![1];
+      const backup = path.join(base, `uploads-backup-${date}`);
+      expect(text).toContain(
+        `mkdir -p '${backup}' && cp -a '${base}/uploads/.' '${backup}/'`,
+      );
+      expect(text).not.toMatch(/symbolic link/);
+    });
+
+    it('follows a symlinked uploads dir and warns about it', async () => {
+      const real = path.join(base, 'data', 'photos');
+      await fs.mkdir(real, { recursive: true });
+      await fs.mkdir(path.join(base, 'app'));
+      const link = path.join(base, 'app', 'uploads');
+      await fs.symlink(real, link);
+
+      const text = await backupInstructions(link);
+
+      const date = text.match(/piggy-flow-(\d{4}-\d{2}-\d{2})\.sql/)![1];
+      const backup = path.join(base, 'data', `photos-backup-${date}`);
+      expect(text).toMatch(/Warning: .*symbolic link/);
+      expect(text).toContain(
+        `mkdir -p '${backup}' && cp -a '${real}/.' '${backup}/'`,
+      );
+    });
   });
 });

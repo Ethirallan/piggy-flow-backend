@@ -8,15 +8,17 @@ import 'reflect-metadata';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
-import { readdir, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { lstat, readdir, realpath, stat } from 'node:fs/promises';
+import { basename, dirname, join, resolve } from 'node:path';
 import { DataSource } from 'typeorm';
 import { MysqlConnectionOptions } from 'typeorm/driver/mysql/MysqlConnectionOptions';
 import { BillPhoto } from '../bill/entities/bill_photo.entity';
 import { uploadsDir } from '../bill/photo-files';
 import { TypeOrmConfigService } from '../shared/typeorm.service';
 import {
+  MigrationRunError,
   PhotoStore,
+  Summary,
   cleanup,
   planMigration,
   planTotals,
@@ -121,15 +123,39 @@ function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-export function backupInstructions(root: string): string {
+const shellQuote = (p: string) => `'${p.replace(/'/g, `'\\''`)}'`;
+
+/**
+ * The backup commands. The uploads copy is taken from the dir's real path
+ * (symlinks resolved) into a sibling of that real dir, so a symlinked
+ * uploads dir is backed up by content and the backup never lands inside the
+ * symlinked tree.
+ */
+export async function backupInstructions(root: string): Promise<string> {
   const env = process.env;
   const date = today();
+  let real = resolve(root);
+  let warning = '';
+  try {
+    real = await realpath(root);
+    if ((await lstat(root)).isSymbolicLink()) {
+      warning = `\nWarning: ${root} is a symbolic link to ${real}. The backup below copies the real directory.\n`;
+    }
+  } catch {
+    // Missing dir: fall back to the resolved path.
+  }
+  const backup = join(dirname(real), `${basename(real)}-backup-${date}`);
   return `Back up first, then rerun with --yes-i-have-a-backup:
-
+${warning}
   mysqldump -h ${env.DB_HOST || '<host>'} -P ${env.DB_PORT || '<port>'} -u ${
     env.DB_USER || '<user>'
   } -p ${env.DB_NAME || '<database>'} > piggy-flow-${date}.sql
-  cp -a ${root} ${root.replace(/\/+$/, '')}-backup-${date}`;
+  mkdir -p ${shellQuote(backup)} && cp -a ${shellQuote(
+    `${real}/.`,
+  )} ${shellQuote(`${backup}/`)}
+
+Check free disk space first: the run adds a copy of every photo, and the
+backup adds another copy of the uploads dir.`;
 }
 
 @Module({
@@ -223,6 +249,32 @@ const list = (title: string, items: string[]) => {
   for (const i of items) console.log(`  ${i}`);
 };
 
+function printRunSummary(s: Summary): void {
+  console.log(`\nMigrated ${s.migrated} row(s).`);
+  console.log(`Already migrated: ${s.alreadyRandom}.`);
+  list(
+    'Missing files, rows left unchanged',
+    s.missing.map((m) => `row ${m.rowId}: ${m.oldPath}`),
+  );
+  list(
+    'Invalid paths, rows left unchanged',
+    s.invalid.map((m) => `row ${m.rowId}: ${JSON.stringify(m.oldPath)}`),
+  );
+  list(
+    'Rows changed during the run, skipped (rerun to retry)',
+    s.skipped.map((m) => `row ${m.rowId}: ${m.oldPath}`),
+  );
+  list(
+    'Orphan copies left in uploads (check the row; delete by hand only if unreferenced)',
+    s.orphanCopies,
+  );
+  console.log(
+    s.migrated > 0
+      ? `\nLog: ${s.logFile}`
+      : '\nNo log written (nothing migrated).',
+  );
+}
+
 async function main(argv: string[]): Promise<number> {
   let args: Args;
   try {
@@ -241,7 +293,7 @@ async function main(argv: string[]): Promise<number> {
   const root = uploadsDir();
   if (args.mode === 'run' && !args.yes) {
     console.error(
-      `Refusing to run without --yes-i-have-a-backup.\n\n${backupInstructions(
+      `Refusing to run without --yes-i-have-a-backup.\n\n${await backupInstructions(
         root,
       )}`,
     );
@@ -284,29 +336,38 @@ Totals:
 
 (New names are generated again on --run.)
 
-${backupInstructions(root)}`);
+${await backupInstructions(root)}`);
         return 0;
       }
 
       case 'run': {
         const stamp = new Date().toISOString().replace(/[:.]/g, '-');
         const logFile = join(root, '.migration', `photos-${stamp}.jsonl`);
-        const s = await runMigration(store, root, logFile);
-        console.log(`\nMigrated ${s.migrated} row(s).`);
-        console.log(`Already migrated: ${s.alreadyRandom}.`);
-        list(
-          'Missing files, rows left unchanged',
-          s.missing.map((m) => `row ${m.rowId}: ${m.oldPath}`),
-        );
-        list(
-          'Invalid paths, rows left unchanged',
-          s.invalid.map((m) => `row ${m.rowId}: ${JSON.stringify(m.oldPath)}`),
-        );
-        list(
-          'Rows changed during the run, skipped (rerun to retry)',
-          s.skipped.map((m) => `row ${m.rowId}: ${m.oldPath}`),
-        );
-        if (s.migrated > 0) console.log(`\nLog: ${logFile}`);
+        let s: Summary;
+        let failure: string | null = null;
+        try {
+          s = await runMigration(store, root, logFile);
+        } catch (e) {
+          if (!(e instanceof MigrationRunError)) throw e;
+          s = e.summary;
+          failure = e.message;
+        }
+        printRunSummary(s);
+        if (failure) {
+          console.error(`\nRun STOPPED: ${failure}`);
+          console.error(
+            'Nothing was deleted. Fix the cause, then rerun the same command; migrated rows are skipped.',
+          );
+          return 1;
+        }
+        const incomplete =
+          s.skipped.length + s.missing.length + s.invalid.length;
+        if (incomplete > 0) {
+          console.error(
+            `\n${incomplete} row(s) were not migrated (listed above).`,
+          );
+          return 1;
+        }
         console.log('\nNext: pnpm migrate:photos --verify');
         return 0;
       }
@@ -317,6 +378,7 @@ ${backupInstructions(root)}`);
         const v = await verify(store, root, logs);
         list('Problems', v.problems);
         list('Missing before the migration', v.missingBeforeMigration);
+        list('Not migrated yet (rerun --run)', v.unmigrated);
         list('Files no row references', v.unreferencedFiles);
         console.log(v.ok ? '\nVerify: OK' : '\nVerify: FAILED');
         return v.ok ? 0 : 1;
