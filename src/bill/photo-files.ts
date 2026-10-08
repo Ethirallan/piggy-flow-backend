@@ -2,7 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import { MulterOptions } from '@nestjs/platform-express/multer/interfaces/multer-options.interface';
 import { randomUUID } from 'node:crypto';
 import { unlink } from 'node:fs/promises';
-import { extname, isAbsolute, relative, resolve } from 'node:path';
+import { basename, extname, isAbsolute, relative, resolve } from 'node:path';
 import { diskStorage } from 'multer';
 
 export const PHOTO_EXTENSIONS: readonly string[] = [
@@ -74,6 +74,16 @@ export async function deletePhotoFiles(
   const rootAbs = resolve(root);
   for (const path of paths) {
     try {
+      if (
+        path === '' ||
+        path === '.' ||
+        path === '..' ||
+        path.includes('\\') ||
+        basename(path) !== path
+      ) {
+        log(`Refusing to delete non-filename photo path: ${path}`);
+        continue;
+      }
       const target = resolve(rootAbs, path);
       const rel = relative(rootAbs, target);
       if (

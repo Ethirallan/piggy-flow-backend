@@ -43,6 +43,11 @@ describe('photo-files', () => {
       ).toBe(false);
       expect(isRandomPhotoName('x.jpg')).toBe(false);
     });
+    it('is false for an upper-case v4 name', () => {
+      expect(
+        isRandomPhotoName('4FF67211-6E54-4E88-B478-1F2DA73F00B2.jpg'),
+      ).toBe(false);
+    });
   });
 
   describe('photoFileFilter', () => {
@@ -66,6 +71,15 @@ describe('photo-files', () => {
       expect(PHOTO_EXTENSIONS).toEqual(['jpg', 'jpeg', 'png', 'gif', 'webp']);
       expect(photoUploadOptions.limits?.fileSize).toBe(MAX_PHOTO_BYTES);
       expect(photoUploadOptions.fileFilter).toBe(photoFileFilter);
+    });
+    it('storage filename callback errors for a disallowed extension', () => {
+      const cb = jest.fn();
+      (photoUploadOptions.storage as any).getFilename(
+        {},
+        { originalname: 'a.pdf' },
+        cb,
+      );
+      expect(cb.mock.calls[0][0]).toBeInstanceOf(Error);
     });
   });
 
@@ -129,6 +143,30 @@ describe('photo-files', () => {
       );
       expect(await exists(path.join(sibling, 'a.jpg'))).toBe(true);
       expect(await exists(root)).toBe(true);
+    });
+
+    it('refuses a path through a directory symlink', async () => {
+      const outsideDir = path.join(base, 'outsidedir');
+      await fs.mkdir(outsideDir);
+      await fs.writeFile(path.join(outsideDir, 'victim'), 'x');
+      await fs.symlink(outsideDir, path.join(root, 'dirlink'));
+      const log = jest.fn();
+      await deletePhotoFiles(['dirlink/victim'], never, root, log);
+      expect(await exists(path.join(outsideDir, 'victim'))).toBe(true);
+      expect(log).toHaveBeenCalled();
+    });
+
+    it('refuses non-bare names even when unreferenced', async () => {
+      await fs.writeFile(path.join(root, 'a.jpg'), 'x');
+      const log = jest.fn();
+      await deletePhotoFiles(
+        ['./a.jpg', 'x/../a.jpg', 'x\\a.jpg'],
+        never,
+        root,
+        log,
+      );
+      expect(await exists(path.join(root, 'a.jpg'))).toBe(true);
+      expect(log).toHaveBeenCalledTimes(3);
     });
 
     it('does not throw for a missing file and logs', async () => {
