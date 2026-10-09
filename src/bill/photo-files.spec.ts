@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import {
+  MAX_CREATE_PHOTO_BYTES,
   MAX_PHOTO_BYTES,
   PHOTO_EXTENSIONS,
   deletePhotoFiles,
@@ -74,9 +75,12 @@ describe('photo-files', () => {
       expect(photoUploadOptions.limits?.fileSize).toBe(MAX_PHOTO_BYTES);
       expect(photoUploadOptions.fileFilter).toBe(photoFileFilter);
     });
-    it('create options share storage and limits but skip disallowed files', () => {
+    it('create options share storage, allow 50 MB and skip disallowed files', () => {
       expect(photoCreateUploadOptions.storage).toBe(photoUploadOptions.storage);
-      expect(photoCreateUploadOptions.limits).toBe(photoUploadOptions.limits);
+      expect(photoCreateUploadOptions.limits?.fileSize).toBe(
+        MAX_CREATE_PHOTO_BYTES,
+      );
+      expect(MAX_CREATE_PHOTO_BYTES).toBe(50 * 1024 * 1024);
       const cb = jest.fn();
       photoCreateUploadOptions.fileFilter(
         {} as any,

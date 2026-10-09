@@ -206,11 +206,24 @@ describe('BillController (HTTP)', () => {
       expect(uploaded()).toEqual([photo.path]);
     });
 
-    it('still rejects an 11 MB file with 413 and keeps no file', async () => {
+    it('accepts an 11 MB file, as POST allows up to 50 MB', async () => {
+      service.create.mockResolvedValue({ id: 12 });
+      service.addPhoto.mockResolvedValue({});
+      service.getBillById.mockResolvedValue({ id: 12 });
+      const res = await request(app.getHttpServer())
+        .post('/bill')
+        .field('body', JSON.stringify({ price: 1 }))
+        .attach('files', Buffer.alloc(11 * 1024 * 1024), 'big.jpg');
+      expect(res.status).toBe(201);
+      expect(service.create).toHaveBeenCalledTimes(1);
+      expect(service.addPhoto).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects a file over 50 MB with 413 and keeps no file', async () => {
       const res = await request(app.getHttpServer())
         .post('/bill')
         .field('body', '{}')
-        .attach('files', Buffer.alloc(11 * 1024 * 1024), 'big.jpg');
+        .attach('files', Buffer.alloc(51 * 1024 * 1024), 'huge.jpg');
       expect(res.status).toBe(413);
       expect(service.create).not.toHaveBeenCalled();
       expect(uploaded()).toEqual([]);

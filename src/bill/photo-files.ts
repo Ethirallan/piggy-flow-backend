@@ -14,6 +14,7 @@ export const PHOTO_EXTENSIONS: readonly string[] = [
   'webp',
 ];
 export const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
+export const MAX_CREATE_PHOTO_BYTES = 50 * 1024 * 1024;
 export const UPLOADS_DIR = './uploads';
 
 /**
@@ -82,12 +83,15 @@ export const photoUploadOptions: MulterOptions = {
 };
 
 /**
- * Upload options for `POST /bill`. Same storage and size limit as
- * `photoUploadOptions`, but a disallowed file is skipped instead of failing
- * the request, as the mobile app has always relied on.
+ * Upload options for `POST /bill`. Same storage as
+ * `photoUploadOptions`, but with a larger size limit (the mobile app ignores
+ * response codes, so a rejected photo would silently lose the bill) and a
+ * disallowed file is skipped instead of failing the request, as the mobile
+ * app has always relied on.
  */
 export const photoCreateUploadOptions: MulterOptions = {
   ...photoUploadOptions,
+  limits: { fileSize: MAX_CREATE_PHOTO_BYTES },
   fileFilter: (req, file, cb) =>
     cb(null, photoExtension(file.originalname) !== null),
 };
