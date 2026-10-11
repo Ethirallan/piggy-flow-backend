@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Req, ParseIntPipe } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Req, ParseIntPipe, NotFoundException } from '@nestjs/common';
 import { ShopService } from './shop.service';
 import { CreateShopDto } from './dto/create-shop.dto';
 import { UpdateShopDto } from './dto/update-shop.dto';
@@ -19,12 +19,14 @@ export class ShopController {
   }
 
   @Patch(':id')
-  update(@Param('id', ParseIntPipe) id: number, @Body() updateShopDto: UpdateShopDto) {
-    return this.shopService.update(id, updateShopDto);
+  update(@Param('id', ParseIntPipe) id: number, @Req() req: any, @Body() updateShopDto: UpdateShopDto) {
+    if (!req.user) throw new NotFoundException();
+    return this.shopService.updateOwned(id, req.user.id, updateShopDto);
   }
 
   @Delete(':id')
-  remove(@Param('id', ParseIntPipe) id: number) {
-    return this.shopService.remove(id);
+  remove(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    if (!req.user) throw new NotFoundException();
+    return this.shopService.removeOwned(id, req.user.id);
   }
 }
