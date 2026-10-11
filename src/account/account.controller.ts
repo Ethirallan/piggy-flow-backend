@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, ParseIntPipe, Req } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, ParseIntPipe, Req, NotFoundException } from '@nestjs/common';
 import { AccountService } from './account.service';
 import { CreateAccountDto } from './dto/create-account.dto';
 import { UpdateAccountDto } from './dto/update-account.dto';
@@ -20,12 +20,14 @@ export class AccountController {
   }
 
   @Patch(':id')
-  update(@Param('id', ParseIntPipe) id: number, @Body() updateAccountDto: UpdateAccountDto) {
-    return this.accountService.update(id, updateAccountDto);
+  update(@Param('id', ParseIntPipe) id: number, @Req() req: any, @Body() updateAccountDto: UpdateAccountDto) {
+    if (!req.user) throw new NotFoundException();
+    return this.accountService.updateMember(id, req.user.id, updateAccountDto);
   }
 
   @Delete(':id')
-  remove(@Param('id', ParseIntPipe) id: number) {
-    return this.accountService.remove(id);
+  remove(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    if (!req.user) throw new NotFoundException();
+    return this.accountService.removeMember(id, req.user.id);
   }
 }

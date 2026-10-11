@@ -22,18 +22,21 @@ export class SubscriptionController {
   }
 
   @Get('getSubscriptionDetails/:id')
-  getSubscriptionDetails(@Param('id', ParseIntPipe) id: number) {
-    return this.subscriptionService.getSubscriptionById(id);
+  getSubscriptionDetails(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    if (!req.user) throw new NotFoundException();
+    return this.subscriptionService.getOwned(id, req.user.id);
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() updateSubscriptionDto: UpdateSubscriptionDto) {
-    return this.subscriptionService.update(+id, updateSubscriptionDto);
+  update(@Param('id', ParseIntPipe) id: number, @Req() req: any, @Body() updateSubscriptionDto: UpdateSubscriptionDto) {
+    if (!req.user) throw new NotFoundException();
+    return this.subscriptionService.updateOwned(id, req.user.id, updateSubscriptionDto);
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.subscriptionService.remove(+id);
+  remove(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    if (!req.user) throw new NotFoundException();
+    return this.subscriptionService.removeOwned(id, req.user.id);
   }
 
   @Get('insertSubscriptions/:secret')

@@ -1,4 +1,4 @@
-import { Controller, Get, Body, Patch, ParseIntPipe, Param, Req } from '@nestjs/common';
+import { Controller, Get, Body, Patch, ParseIntPipe, Param, Req, NotFoundException } from '@nestjs/common';
 import { UserService } from './user.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -9,13 +9,16 @@ export class UserController {
   constructor(private readonly userService: UserService) {}
 
   @Get('getUserById/:id')
-  getUserData(@Param('id', ParseIntPipe) id: number) {
+  getUserData(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    if (!req.user || req.user.id !== id) throw new NotFoundException();
     return this.userService.findOne(id);
   }
 
   @Patch()
-  update(@Body() updateUserDto: UpdateUserDto) {
-    return this.userService.update(updateUserDto);
+  update(@Req() req: any, @Body() updateUserDto: UpdateUserDto) {
+    if (!req.user) throw new NotFoundException();
+    if (updateUserDto.displayName === undefined) return req.user;
+    return this.userService.update({ id: req.user.id, displayName: updateUserDto.displayName });
   }
 
   @Get('login')

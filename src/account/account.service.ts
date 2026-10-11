@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CreateAccountDto } from './dto/create-account.dto';
@@ -32,11 +32,21 @@ export class AccountService {
     }
   }
 
-  update(id: number, updateAccountDto: UpdateAccountDto) {
-    return this.accountRepository.update(id, updateAccountDto);
+  async assertMember(accountId: number, userId: number | undefined): Promise<Account> {
+    if (userId == null) throw new NotFoundException();
+    const account = await this.accountRepository.findOne({ where: { id: accountId }, relations: ['users'] });
+    if (!account || !account.users?.some((u) => u.id === userId)) throw new NotFoundException();
+    return account;
   }
 
-  remove(id: number) {
+  async updateMember(id: number, userId: number | undefined, dto: UpdateAccountDto) {
+    await this.assertMember(id, userId);
+    if (dto.name === undefined) return;
+    return this.accountRepository.update(id, { name: dto.name });
+  }
+
+  async removeMember(id: number, userId: number | undefined) {
+    await this.assertMember(id, userId);
     return this.accountRepository.delete(id);
   }
 }
