@@ -45,3 +45,5 @@ Before the first deploy, a human must check this against a production dump:
 ## Rules
 
 Never edit a migration that has run in production. Write a new one instead.
+
+`migration:revert` stops at the baseline: its `down()` throws, because reverting it would drop every table.
