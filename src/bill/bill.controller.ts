@@ -107,21 +107,20 @@ export class BillController {
     @Req() req: any,
     @UploadedFiles() files: Array<Express.Multer.File>,
   ) {
-    let createBillDto: CreateBillDto = new CreateBillDto();
     try {
+      if (!req.user) throw new NotFoundException();
       if (files) {
-        data = JSON.parse(data.body);
+        try {
+          data = JSON.parse(data.body);
+        } catch {
+          throw new BadRequestException('Invalid body.');
+        }
       }
-      createBillDto = Object.assign(createBillDto, data);
-      createBillDto.user = req['user'];
-      await this.billService.assertTargetAccount(createBillDto.account, req.user?.id);
-    } catch (e) {
-      await discardUploads(files ?? []);
-      throw e;
-    }
-    const bill = await this.billService.create(createBillDto);
-    if (files) {
-      for (const file of files) {
+      const createBillDto = Object.assign(new CreateBillDto(), data);
+      createBillDto.user = req.user;
+      await this.billService.assertTargetAccount(createBillDto.account, req.user.id);
+      const bill = await this.billService.create(createBillDto);
+      for (const file of files ?? []) {
         const newPhoto = new CreateBillPhotoDto();
         newPhoto.name = file.originalname;
         newPhoto.path = file.filename;
@@ -134,9 +133,11 @@ export class BillController {
         newPhoto.bill = bill;
         await this.billService.addPhoto(newPhoto);
       }
+      return await this.billService.getBillById(bill.id);
+    } catch (e) {
+      await discardUploads(files ?? []);
+      throw e;
     }
-
-    return this.billService.getBillById(bill.id);
   }
 
   @Get('getPhoto/:path')

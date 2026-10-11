@@ -245,6 +245,17 @@ describe('BillService', () => {
       expect(deleteCalls()[0][0]).toEqual(['n1.jpg']);
     });
 
+    it.each(['77', 77, [], {}])(
+      'returns 400 for a malformed account %j, writes nothing and deletes the new files',
+      async (account) => {
+        await expect(
+          service.updateWithPhotos(5, 1, { account } as any, [file('n1.jpg')]),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(dataSource.transaction).not.toHaveBeenCalled();
+        expect(deleteCalls()[0][0]).toEqual(['n1.jpg']);
+      },
+    );
+
     it('updates to a member target account, and skips the check for account null', async () => {
       await service.updateWithPhotos(5, 1, { account: { id: 8 } } as any, []);
       expect(accounts.assertMember).toHaveBeenCalledWith(8, 1);

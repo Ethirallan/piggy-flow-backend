@@ -9,6 +9,7 @@ export class AccountController {
 
   @Post()
   create(@Req() req: any, @Body() createAccountDto: CreateAccountDto) {
+    if (!req.user) throw new NotFoundException();
 
     // Membership management is a later project: the caller is the only member.
     createAccountDto.users = [req.user];

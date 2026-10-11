@@ -1,4 +1,4 @@
-import { INestApplication, NotFoundException } from '@nestjs/common';
+import { BadRequestException, INestApplication, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -277,6 +277,60 @@ describe('BillController (HTTP)', () => {
       expect(res.status).toBe(404);
       expect(service.create).not.toHaveBeenCalled();
       expect(service.addPhoto).not.toHaveBeenCalled();
+      expect(uploaded()).toEqual([]);
+    });
+
+    it('removes the uploads when the account check gives 400', async () => {
+      service.assertTargetAccount.mockRejectedValue(new BadRequestException('Invalid account.'));
+      const res = await request(app.getHttpServer())
+        .post('/bill')
+        .field('body', JSON.stringify({ price: 1, account: 77 }))
+        .attach('files', Buffer.from('img'), 'IMG_1.JPG');
+      expect(res.status).toBe(400);
+      expect(service.create).not.toHaveBeenCalled();
+      expect(uploaded()).toEqual([]);
+    });
+
+    it('gives 404 without a request user and removes the uploads', async () => {
+      user = undefined;
+      const res = await request(app.getHttpServer())
+        .post('/bill')
+        .field('body', JSON.stringify({ price: 1 }))
+        .attach('files', Buffer.from('img'), 'IMG_1.JPG');
+      expect(res.status).toBe(404);
+      expect(service.create).not.toHaveBeenCalled();
+      expect(uploaded()).toEqual([]);
+    });
+
+    it('gives 400 Invalid body. for malformed JSON and removes the uploads', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/bill')
+        .field('body', '{not json')
+        .attach('files', Buffer.from('img'), 'IMG_1.JPG');
+      expect(res.status).toBe(400);
+      expect(res.body.message).toBe('Invalid body.');
+      expect(service.create).not.toHaveBeenCalled();
+      expect(uploaded()).toEqual([]);
+    });
+
+    it('removes the uploads when create fails', async () => {
+      service.create.mockRejectedValue(new Error('db down'));
+      const res = await request(app.getHttpServer())
+        .post('/bill')
+        .field('body', JSON.stringify({ price: 1 }))
+        .attach('files', Buffer.from('img'), 'IMG_1.JPG');
+      expect(res.status).toBe(500);
+      expect(uploaded()).toEqual([]);
+    });
+
+    it('removes the uploads when saving a photo fails', async () => {
+      service.create.mockResolvedValue({ id: 14 });
+      service.addPhoto.mockRejectedValue(new Error('db down'));
+      const res = await request(app.getHttpServer())
+        .post('/bill')
+        .field('body', JSON.stringify({ price: 1 }))
+        .attach('files', Buffer.from('img'), 'IMG_1.JPG');
+      expect(res.status).toBe(500);
       expect(uploaded()).toEqual([]);
     });
   });

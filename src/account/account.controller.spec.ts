@@ -63,4 +63,11 @@ describe('AccountController', () => {
     expect(service.create.mock.calls[0][0].users).toEqual([{ id: 7 }]);
     expect(service.create.mock.calls[0][0].name).toBe('Home');
   });
+
+  it('POST gives 404 without a request user', async () => {
+    user = undefined;
+    const res = await request(app.getHttpServer()).post('/account').send({ name: 'Home' });
+    expect(res.status).toBe(404);
+    expect(service.create).not.toHaveBeenCalled();
+  });
 });

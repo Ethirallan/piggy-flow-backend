@@ -4,6 +4,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AccountService } from 'src/account/account.service';
+import { assertAccountRef } from 'src/shared/account-ref';
 import { Subscription } from './entities/subscription.entity';
 
 const UPDATABLE_FIELDS = ['account', 'chargeDay', 'shop', 'category', 'price', 'name'] as const;
@@ -26,8 +27,8 @@ export class SubscriptionService {
     return this.create(dto);
   }
 
-  private async assertTargetAccount(account: { id?: number } | null | undefined, userId: number | undefined) {
-    if (account?.id != null) await this.accountService.assertMember(account.id, userId);
+  private async assertTargetAccount(account: unknown, userId: number | undefined) {
+    await assertAccountRef(account, userId, this.accountService);
   }
 
   async getSubscriptionById(id: number) {

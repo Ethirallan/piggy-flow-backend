@@ -6,6 +6,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
 import { AccountService } from 'src/account/account.service';
+import { assertAccountRef } from 'src/shared/account-ref';
 import { CreateBillPhotoDto } from './dto/create-bill-photo.dto';
 import { CreateBillDto } from './dto/create-bill.dto';
 import { UpdateBillDto } from './dto/update-bill.dto';
@@ -35,8 +36,8 @@ export class BillService {
   ) {}
 
   /** A target account must be one the user belongs to; null means personal. */
-  async assertTargetAccount(account: { id?: number } | null | undefined, userId: number | undefined) {
-    if (account?.id != null) await this.accountService.assertMember(account.id, userId);
+  async assertTargetAccount(account: unknown, userId: number | undefined) {
+    await assertAccountRef(account, userId, this.accountService);
   }
 
   create(createBillDto: CreateBillDto) {

@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { AccountService } from '../account/account.service';
@@ -119,5 +119,25 @@ describe('SubscriptionService', () => {
     expect(accounts.assertMember).toHaveBeenCalledTimes(1);
     expect(accounts.assertMember).toHaveBeenCalledWith(8, 7);
     expect(repo.save).toHaveBeenCalledTimes(3);
+  });
+
+  describe.each(['77', 77, [], {}])('a bare or malformed account %j', (account) => {
+    it('updateOwned gives 400 and writes nothing', async () => {
+      repo.findOne.mockResolvedValue(creatorSub);
+      await expect(service.updateOwned(4, 7, { account } as any)).rejects.toBeInstanceOf(BadRequestException);
+      expect(repo.update).not.toHaveBeenCalled();
+    });
+
+    it('createOwned gives 400 and saves nothing', async () => {
+      await expect(service.createOwned(7, { account } as any)).rejects.toBeInstanceOf(BadRequestException);
+      expect(repo.save).not.toHaveBeenCalled();
+    });
+  });
+
+  it('updateOwned accepts account null', async () => {
+    repo.findOne.mockResolvedValue(creatorSub);
+    await service.updateOwned(4, 7, { account: null } as any);
+    expect(repo.update).toHaveBeenCalledWith(4, { account: null });
+    expect(accounts.assertMember).not.toHaveBeenCalled();
   });
 });
