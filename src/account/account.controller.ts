@@ -10,7 +10,8 @@ export class AccountController {
   @Post()
   create(@Req() req: any, @Body() createAccountDto: CreateAccountDto) {
 
-    createAccountDto.users = [...createAccountDto.users??[], req.user];
+    // Membership management is a later project: the caller is the only member.
+    createAccountDto.users = [req.user];
     return this.accountService.create(createAccountDto);
   }
 

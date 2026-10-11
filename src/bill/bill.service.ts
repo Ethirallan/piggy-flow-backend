@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
+import { AccountService } from 'src/account/account.service';
 import { CreateBillPhotoDto } from './dto/create-bill-photo.dto';
 import { CreateBillDto } from './dto/create-bill.dto';
 import { UpdateBillDto } from './dto/update-bill.dto';
@@ -30,7 +31,13 @@ export class BillService {
     @InjectRepository(BillPhoto)
     private billPhotoRepository: Repository<BillPhoto>,
     private dataSource: DataSource,
+    private accountService: AccountService,
   ) {}
+
+  /** A target account must be one the user belongs to; null means personal. */
+  async assertTargetAccount(account: { id?: number } | null | undefined, userId: number | undefined) {
+    if (account?.id != null) await this.accountService.assertMember(account.id, userId);
+  }
 
   create(createBillDto: CreateBillDto) {
     return this.billRepository.save(createBillDto);
@@ -118,6 +125,7 @@ export class BillService {
     let removedPaths: string[];
     try {
       const bill = await this.getOwnedBill(id, userId);
+      await this.assertTargetAccount(dto.account, userId);
 
       const removeIds = [...new Set(dto.removePhotoIds ?? [])];
       const photos = bill.photos ?? [];

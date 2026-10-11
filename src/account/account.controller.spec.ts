@@ -7,7 +7,7 @@ import { AccountService } from './account.service';
 describe('AccountController', () => {
   let app: INestApplication;
   let user: any;
-  const service = { updateMember: jest.fn(), removeMember: jest.fn() };
+  const service = { create: jest.fn(), updateMember: jest.fn(), removeMember: jest.fn() };
 
   beforeEach(async () => {
     jest.resetAllMocks();
@@ -51,5 +51,16 @@ describe('AccountController', () => {
   it('a 404 from the service reaches the client', async () => {
     service.removeMember.mockRejectedValue(new NotFoundException());
     expect((await request(app.getHttpServer()).delete('/account/5')).status).toBe(404);
+  });
+
+  it('POST ignores users in the body and saves only the caller as member', async () => {
+    service.create.mockResolvedValue({ id: 1 });
+    const res = await request(app.getHttpServer())
+      .post('/account')
+      .send({ name: 'Home', users: [{ id: 99 }] });
+    expect(res.status).toBe(201);
+    expect(service.create).toHaveBeenCalledTimes(1);
+    expect(service.create.mock.calls[0][0].users).toEqual([{ id: 7 }]);
+    expect(service.create.mock.calls[0][0].name).toBe('Home');
   });
 });

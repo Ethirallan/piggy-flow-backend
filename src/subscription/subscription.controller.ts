@@ -11,8 +11,9 @@ export class SubscriptionController {
 
   @Post()
   async create(@Req() req: any, @Body() createSubscriptionDto: CreateSubscriptionDto) {
+    if (!req.user) throw new NotFoundException();
     createSubscriptionDto.user = req.user;
-    const subscription = await this.subscriptionService.create(createSubscriptionDto);
+    const subscription = await this.subscriptionService.createOwned(req.user.id, createSubscriptionDto);
     return this.subscriptionService.getSubscriptionById(subscription.id);
   }
 

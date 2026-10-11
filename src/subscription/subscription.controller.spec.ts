@@ -1,4 +1,4 @@
-import { INestApplication } from '@nestjs/common';
+import { INestApplication, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
 import { SubscriptionController } from './subscription.controller';
@@ -8,7 +8,7 @@ import { BillService } from '../bill/bill.service';
 describe('SubscriptionController', () => {
   let app: INestApplication;
   let user: any;
-  const service = { getOwned: jest.fn(), updateOwned: jest.fn(), removeOwned: jest.fn() };
+  const service = { createOwned: jest.fn(), getSubscriptionById: jest.fn(), getOwned: jest.fn(), updateOwned: jest.fn(), removeOwned: jest.fn() };
 
   beforeEach(async () => {
     jest.resetAllMocks();
@@ -56,5 +56,23 @@ describe('SubscriptionController', () => {
     expect(service.getOwned).not.toHaveBeenCalled();
     expect(service.updateOwned).not.toHaveBeenCalled();
     expect(service.removeOwned).not.toHaveBeenCalled();
+  });
+
+  it('POST checks the target account through the service and saves the request user as owner', async () => {
+    service.createOwned.mockResolvedValue({ id: 9 });
+    service.getSubscriptionById.mockResolvedValue({ id: 9 });
+    const res = await request(app.getHttpServer())
+      .post('/subscription')
+      .send({ chargeDay: 1, price: 2, shop: { id: 1 }, category: { id: 1 }, account: { id: 4 } });
+    expect(res.status).toBe(201);
+    expect(service.createOwned).toHaveBeenCalledWith(7, expect.objectContaining({ account: { id: 4 }, user: { id: 7 } }));
+  });
+
+  it('POST gives 404 when the service rejects the target account', async () => {
+    service.createOwned.mockRejectedValue(new NotFoundException());
+    const res = await request(app.getHttpServer())
+      .post('/subscription')
+      .send({ chargeDay: 1, price: 2, shop: { id: 1 }, category: { id: 1 }, account: { id: 4 } });
+    expect(res.status).toBe(404);
   });
 });

@@ -5,8 +5,10 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { Bill } from './entities/bill.entity';
 import { BillPhoto } from './entities/bill_photo.entity';
 
+import { AccountModule } from 'src/account/account.module';
+
 @Module({
-  imports: [TypeOrmModule.forFeature([Bill, BillPhoto])],
+  imports: [TypeOrmModule.forFeature([Bill, BillPhoto]), AccountModule],
   controllers: [BillController],
   providers: [BillService],
   exports: [BillService]

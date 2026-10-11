@@ -68,6 +68,7 @@ describe('BillController (HTTP)', () => {
     create: jest.fn(),
     addPhoto: jest.fn(),
     getBillById: jest.fn(),
+    assertTargetAccount: jest.fn(),
   };
   const V4_JPG = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.jpg$/;
   const uploaded = () => fs.readdirSync(uploads);
@@ -254,6 +255,29 @@ describe('BillController (HTTP)', () => {
       expect(photo.bill).toEqual({ id: 10 });
       expect(uploaded()).toEqual([photo.path]);
       expect(service.getBillById).toHaveBeenCalledWith(10);
+    });
+
+    it('checks the target account before creating, then lets a member through', async () => {
+      service.create.mockResolvedValue({ id: 13 });
+      service.getBillById.mockResolvedValue({ id: 13 });
+      const res = await request(app.getHttpServer())
+        .post('/bill')
+        .field('body', JSON.stringify({ price: 1, account: { id: 4 } }));
+      expect(res.status).toBe(201);
+      expect(service.assertTargetAccount).toHaveBeenCalledWith({ id: 4 }, 7);
+      expect(service.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('gives 404 for a non-member target account, writes nothing and removes the uploads', async () => {
+      service.assertTargetAccount.mockRejectedValue(new NotFoundException());
+      const res = await request(app.getHttpServer())
+        .post('/bill')
+        .field('body', JSON.stringify({ price: 1, account: { id: 4 } }))
+        .attach('files', Buffer.from('img'), 'IMG_1.JPG');
+      expect(res.status).toBe(404);
+      expect(service.create).not.toHaveBeenCalled();
+      expect(service.addPhoto).not.toHaveBeenCalled();
+      expect(uploaded()).toEqual([]);
     });
   });
 });

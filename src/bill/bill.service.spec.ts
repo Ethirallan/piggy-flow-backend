@@ -5,6 +5,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as nodePath from 'node:path';
 import { DataSource, In } from 'typeorm';
+import { AccountService } from '../account/account.service';
 import { BillService } from './bill.service';
 import { Bill } from './entities/bill.entity';
 import { BillPhoto } from './entities/bill_photo.entity';
@@ -22,6 +23,7 @@ describe('BillService', () => {
   let photos: { count: jest.Mock };
   let manager: { update: jest.Mock; delete: jest.Mock; insert: jest.Mock };
   let dataSource: { transaction: jest.Mock };
+  let accounts: { assertMember: jest.Mock };
 
   const bill = (over: any = {}) => ({
     id: 5,
@@ -46,12 +48,14 @@ describe('BillService', () => {
       insert: jest.fn().mockResolvedValue({}),
     };
     dataSource = { transaction: jest.fn((cb) => cb(manager)) };
+    accounts = { assertMember: jest.fn().mockResolvedValue({}) };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         BillService,
         { provide: getRepositoryToken(Bill), useValue: bills },
         { provide: getRepositoryToken(BillPhoto), useValue: photos },
         { provide: DataSource, useValue: dataSource },
+        { provide: AccountService, useValue: accounts },
       ],
     }).compile();
     service = module.get<BillService>(BillService);
@@ -228,6 +232,26 @@ describe('BillService', () => {
       const [paths, isReferenced] = deleteCalls()[0];
       expect(paths).toEqual(['n1.jpg']);
       await expect(isReferenced('n1.jpg')).resolves.toBe(false);
+    });
+
+    it('returns 404 for a non-member target account, writes nothing and deletes the new files', async () => {
+      accounts.assertMember.mockRejectedValue(new NotFoundException());
+      await expect(
+        service.updateWithPhotos(5, 1, { account: { id: 77 } } as any, [file('n1.jpg')]),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(accounts.assertMember).toHaveBeenCalledWith(77, 1);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(deleteCalls()).toHaveLength(1);
+      expect(deleteCalls()[0][0]).toEqual(['n1.jpg']);
+    });
+
+    it('updates to a member target account, and skips the check for account null', async () => {
+      await service.updateWithPhotos(5, 1, { account: { id: 8 } } as any, []);
+      expect(accounts.assertMember).toHaveBeenCalledWith(8, 1);
+      expect(manager.update).toHaveBeenCalledWith(expect.anything(), 5, { account: { id: 8 } });
+      accounts.assertMember.mockClear();
+      await service.updateWithPhotos(5, 1, { account: null } as any, []);
+      expect(accounts.assertMember).not.toHaveBeenCalled();
     });
 
     it('returns 404 for a stranger and deletes the new files', async () => {

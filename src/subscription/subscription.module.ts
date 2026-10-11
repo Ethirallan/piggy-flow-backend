@@ -7,8 +7,10 @@ import { BillService } from 'src/bill/bill.service';
 import { Bill } from 'src/bill/entities/bill.entity';
 import { BillPhoto } from 'src/bill/entities/bill_photo.entity';
 
+import { AccountModule } from 'src/account/account.module';
+
 @Module({
-  imports: [TypeOrmModule.forFeature([Subscription, Bill, BillPhoto])],
+  imports: [TypeOrmModule.forFeature([Subscription, Bill, BillPhoto]), AccountModule],
   controllers: [SubscriptionController],
   providers: [SubscriptionService, BillService],
 })

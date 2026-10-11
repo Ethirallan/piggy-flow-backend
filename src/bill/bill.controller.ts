@@ -107,13 +107,18 @@ export class BillController {
     @Req() req: any,
     @UploadedFiles() files: Array<Express.Multer.File>,
   ) {
-    if (files) {
-      data = JSON.parse(data.body);
-    }
-
     let createBillDto: CreateBillDto = new CreateBillDto();
-    createBillDto = Object.assign(createBillDto, data);
-    createBillDto.user = req['user'];
+    try {
+      if (files) {
+        data = JSON.parse(data.body);
+      }
+      createBillDto = Object.assign(createBillDto, data);
+      createBillDto.user = req['user'];
+      await this.billService.assertTargetAccount(createBillDto.account, req.user?.id);
+    } catch (e) {
+      await discardUploads(files ?? []);
+      throw e;
+    }
     const bill = await this.billService.create(createBillDto);
     if (files) {
       for (const file of files) {
