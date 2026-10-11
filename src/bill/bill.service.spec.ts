@@ -243,6 +243,14 @@ describe('BillService', () => {
       expect(deleteCalls().flatMap(([paths]) => paths)).not.toContain('n1.jpg');
     });
 
+    it('rejects an unknown photo id with 400 before creating a Personal account', async () => {
+      await expect(
+        service.updateWithPhotos(5, 1, { account: null, removePhotoIds: [99] } as any, []),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(personal.ensurePersonal).not.toHaveBeenCalled();
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
     it('rejects an unknown photo id with 400 and deletes the new files', async () => {
       await expect(
         service.updateWithPhotos(5, 1, { removePhotoIds: [2, 42] }, [file('n1.jpg')]),

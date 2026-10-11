@@ -133,9 +133,6 @@ export class BillService {
     try {
       const bill = await this.getOwnedBill(id, userId);
       await this.assertTargetAccount(dto.account, userId);
-      if (dto.account === null) {
-        dto.account = await this.personalAccounts.ensurePersonal(bill.user?.id ?? userId);
-      }
 
       const removeIds = [...new Set(dto.removePhotoIds ?? [])];
       const photos = bill.photos ?? [];
@@ -145,6 +142,10 @@ export class BillService {
       removedPaths = photos
         .filter((p) => removeIds.includes(p.id))
         .map((p) => p.path);
+
+      if (dto.account === null) {
+        dto.account = await this.personalAccounts.ensurePersonal(bill.user?.id ?? userId);
+      }
 
       const fields: Partial<Bill> = {};
       for (const key of UPDATABLE_FIELDS) {

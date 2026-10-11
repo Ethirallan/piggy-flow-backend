@@ -8,7 +8,8 @@ import { BillService } from '../bill/bill.service';
 describe('SubscriptionController', () => {
   let app: INestApplication;
   let user: any;
-  const service = { createOwned: jest.fn(), getSubscriptionById: jest.fn(), getOwned: jest.fn(), updateOwned: jest.fn(), removeOwned: jest.fn() };
+  const service = { createOwned: jest.fn(), getSubscriptionById: jest.fn(), getOwned: jest.fn(), updateOwned: jest.fn(), removeOwned: jest.fn(), getSubscriptionsByDay: jest.fn() };
+  const bills = { create: jest.fn() };
 
   beforeEach(async () => {
     jest.resetAllMocks();
@@ -17,7 +18,7 @@ describe('SubscriptionController', () => {
       controllers: [SubscriptionController],
       providers: [
         { provide: SubscriptionService, useValue: service },
-        { provide: BillService, useValue: {} },
+        { provide: BillService, useValue: bills },
       ],
     }).compile();
     app = module.createNestApplication();
@@ -74,5 +75,43 @@ describe('SubscriptionController', () => {
       .post('/subscription')
       .send({ chargeDay: 1, price: 2, shop: { id: 1 }, category: { id: 1 }, account: { id: 4 } });
     expect(res.status).toBe(404);
+  });
+
+  describe('insertSubscriptions', () => {
+    const OLD_SECRET = process.env.CRON_SECRET;
+    beforeEach(() => (process.env.CRON_SECRET = 's3cret'));
+    afterAll(() => (process.env.CRON_SECRET = OLD_SECRET));
+
+    const sub = (id: number) => ({ id, user: { id: 7 }, account: null, shop: { id: 1 }, category: { id: 2 }, price: 3, name: `s${id}` });
+
+    it('creates the bills one after another, never in parallel', async () => {
+      service.getSubscriptionsByDay.mockResolvedValue([sub(1), sub(2)]);
+      const events: string[] = [];
+      bills.create.mockImplementation(async (dto: any) => {
+        events.push(`start ${dto.comment}`);
+        await new Promise((r) => setTimeout(r, 5));
+        events.push(`end ${dto.comment}`);
+        return { id: 1 };
+      });
+      const res = await request(app.getHttpServer()).get('/subscription/insertSubscriptions/s3cret');
+      expect(res.status).toBe(200);
+      expect(events).toEqual(['start s1', 'end s1', 'start s2', 'end s2']);
+      expect(bills.create).toHaveBeenCalledWith(expect.objectContaining({ user: { id: 7 }, account: null, comment: 's1' }));
+    });
+
+    it('a failing create makes the endpoint fail (500) instead of an unhandled rejection', async () => {
+      service.getSubscriptionsByDay.mockResolvedValue([sub(1), sub(2)]);
+      bills.create.mockRejectedValueOnce(new Error('db down')).mockResolvedValue({ id: 1 });
+      const res = await request(app.getHttpServer()).get('/subscription/insertSubscriptions/s3cret');
+      expect(res.status).toBe(500);
+      expect(bills.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('gives 404 for a wrong secret and creates nothing', async () => {
+      const res = await request(app.getHttpServer()).get('/subscription/insertSubscriptions/wrong');
+      expect(res.status).toBe(404);
+      expect(service.getSubscriptionsByDay).not.toHaveBeenCalled();
+      expect(bills.create).not.toHaveBeenCalled();
+    });
   });
 });

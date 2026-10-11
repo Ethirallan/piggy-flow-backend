@@ -45,7 +45,9 @@ export class SubscriptionController {
     if (secret === process.env.CRON_SECRET) {
       const day = new Date().getDate();
       const subscriptions = await this.subscriptionService.getSubscriptionsByDay(day);
-      subscriptions.forEach(subscription => {
+      // One at a time: parallel creates would race in ensurePersonal and
+      // could give a user several Personal accounts.
+      for (const subscription of subscriptions) {
         const newBill = new CreateBillDto();
         newBill.user = subscription.user;
         newBill.account = subscription.account;
@@ -54,8 +56,8 @@ export class SubscriptionController {
         newBill.price = subscription.price;
         newBill.comment = subscription.name;
         newBill.date = new Date();
-        this.billService.create(newBill);
-      });
+        await this.billService.create(newBill);
+      }
     } else {
       throw new NotFoundException;
     }
