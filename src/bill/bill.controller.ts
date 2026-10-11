@@ -107,6 +107,7 @@ export class BillController {
     @Req() req: any,
     @UploadedFiles() files: Array<Express.Multer.File>,
   ) {
+    let bill: { id: number };
     try {
       if (!req.user) throw new NotFoundException();
       if (files) {
@@ -119,7 +120,13 @@ export class BillController {
       const createBillDto = Object.assign(new CreateBillDto(), data);
       createBillDto.user = req.user;
       await this.billService.assertTargetAccount(createBillDto.account, req.user.id);
-      const bill = await this.billService.create(createBillDto);
+      bill = await this.billService.create(createBillDto);
+    } catch (e) {
+      // Nothing references the uploads yet.
+      await discardUploads(files ?? []);
+      throw e;
+    }
+    try {
       for (const file of files ?? []) {
         const newPhoto = new CreateBillPhotoDto();
         newPhoto.name = file.originalname;
@@ -130,14 +137,19 @@ export class BillController {
           console.warn(`Blurhash failed for ${file.filename}:`, e);
           newPhoto.blurhash = '000000';
         }
-        newPhoto.bill = bill;
+        newPhoto.bill = bill as any;
         await this.billService.addPhoto(newPhoto);
       }
-      return await this.billService.getBillById(bill.id);
     } catch (e) {
-      await discardUploads(files ?? []);
+      // The bill and some photo rows are saved: delete only unreferenced files.
+      await deletePhotoFiles(
+        (files ?? []).map((f) => f.filename).filter(Boolean),
+        (path) => this.billService.isPhotoPathReferenced(path),
+      );
       throw e;
     }
+
+    return this.billService.getBillById(bill.id);
   }
 
   @Get('getPhoto/:path')

@@ -69,6 +69,7 @@ describe('BillController (HTTP)', () => {
     addPhoto: jest.fn(),
     getBillById: jest.fn(),
     assertTargetAccount: jest.fn(),
+    isPhotoPathReferenced: jest.fn(),
   };
   const V4_JPG = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.jpg$/;
   const uploaded = () => fs.readdirSync(uploads);
@@ -323,15 +324,36 @@ describe('BillController (HTTP)', () => {
       expect(uploaded()).toEqual([]);
     });
 
-    it('removes the uploads when saving a photo fails', async () => {
+    it('when saving the second photo fails, keeps the referenced first file and deletes the second', async () => {
+      const saved: string[] = [];
       service.create.mockResolvedValue({ id: 14 });
-      service.addPhoto.mockRejectedValue(new Error('db down'));
+      service.addPhoto.mockImplementation(async (photo: any) => {
+        if (saved.length === 1) throw new Error('db down');
+        saved.push(photo.path);
+      });
+      service.isPhotoPathReferenced.mockImplementation(async (p: string) => saved.includes(p));
       const res = await request(app.getHttpServer())
         .post('/bill')
         .field('body', JSON.stringify({ price: 1 }))
-        .attach('files', Buffer.from('img'), 'IMG_1.JPG');
+        .attach('files', Buffer.from('one'), 'a.jpg')
+        .attach('files', Buffer.from('two'), 'b.jpg');
       expect(res.status).toBe(500);
-      expect(uploaded()).toEqual([]);
+      expect(saved).toHaveLength(1);
+      expect(uploaded()).toEqual(saved);
+    });
+
+    it('keeps every file when the read-back fails after everything was saved', async () => {
+      service.create.mockResolvedValue({ id: 15 });
+      service.addPhoto.mockResolvedValue({});
+      service.getBillById.mockRejectedValue(new Error('db down'));
+      service.isPhotoPathReferenced.mockResolvedValue(false);
+      const res = await request(app.getHttpServer())
+        .post('/bill')
+        .field('body', JSON.stringify({ price: 1 }))
+        .attach('files', Buffer.from('one'), 'a.jpg')
+        .attach('files', Buffer.from('two'), 'b.jpg');
+      expect(res.status).toBe(500);
+      expect(uploaded()).toHaveLength(2);
     });
   });
 });
