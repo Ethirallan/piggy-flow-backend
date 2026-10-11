@@ -1,0 +1,258 @@
+import { BadRequestException } from '@nestjs/common';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import {
+  MAX_CREATE_PHOTO_BYTES,
+  MAX_PHOTO_BYTES,
+  PHOTO_EXTENSIONS,
+  deletePhotoFiles,
+  isRandomPhotoName,
+  photoExtension,
+  photoFileFilter,
+  photoFilename,
+  photoCreateUploadOptions,
+  photoUploadOptions,
+  uploadsDir,
+} from './photo-files';
+
+describe('photo-files', () => {
+  describe('photoExtension', () => {
+    it('lowercases allowed extensions', () => {
+      expect(photoExtension('IMG.JPG')).toBe('jpg');
+    });
+    it('rejects disallowed or missing extensions', () => {
+      expect(photoExtension('a.HEIC')).toBeNull();
+      expect(photoExtension('noext')).toBeNull();
+    });
+  });
+
+  describe('photoFilename', () => {
+    it('generates a random v4 name with lowercase ext', () => {
+      const a = photoFilename('IMG_1.JPG');
+      expect(a).toMatch(/^[0-9a-f-]{36}\.jpg$/);
+      expect(photoFilename('IMG_1.JPG')).not.toBe(a);
+      expect(isRandomPhotoName(a)).toBe(true);
+    });
+    it('throws for disallowed types', () => {
+      expect(() => photoFilename('a.pdf')).toThrow();
+    });
+  });
+
+  describe('isRandomPhotoName', () => {
+    it('is false for v5 uuids and non-uuid names', () => {
+      expect(
+        isRandomPhotoName('4ff67211-6e54-5e88-b478-1f2da73f00b2.jpg'),
+      ).toBe(false);
+      expect(isRandomPhotoName('x.jpg')).toBe(false);
+    });
+    it('is false for an upper-case v4 name', () => {
+      expect(
+        isRandomPhotoName('4FF67211-6E54-4E88-B478-1F2DA73F00B2.jpg'),
+      ).toBe(false);
+    });
+  });
+
+  describe('photoFileFilter', () => {
+    it('accepts .Png', () => {
+      const cb = jest.fn();
+      photoFileFilter({}, { originalname: 'a.Png' }, cb);
+      expect(cb).toHaveBeenCalledWith(null, true);
+    });
+    it('rejects .pdf with BadRequestException', () => {
+      const cb = jest.fn();
+      photoFileFilter({}, { originalname: 'a.pdf' }, cb);
+      const err = cb.mock.calls[0][0];
+      expect(err).toBeInstanceOf(BadRequestException);
+      expect(err.message).toBe('Photos must be JPG, PNG, GIF or WebP.');
+    });
+  });
+
+  describe('config', () => {
+    it('exposes limits and extensions', () => {
+      expect(MAX_PHOTO_BYTES).toBe(10 * 1024 * 1024);
+      expect(PHOTO_EXTENSIONS).toEqual(['jpg', 'jpeg', 'png', 'gif', 'webp']);
+      expect(photoUploadOptions.limits?.fileSize).toBe(MAX_PHOTO_BYTES);
+      expect(photoUploadOptions.fileFilter).toBe(photoFileFilter);
+    });
+    it('create options share storage, allow 50 MB and skip disallowed files', () => {
+      expect(photoCreateUploadOptions.storage).toBe(photoUploadOptions.storage);
+      expect(photoCreateUploadOptions.limits?.fileSize).toBe(
+        MAX_CREATE_PHOTO_BYTES,
+      );
+      expect(MAX_CREATE_PHOTO_BYTES).toBe(50 * 1024 * 1024);
+      const cb = jest.fn();
+      photoCreateUploadOptions.fileFilter(
+        {} as any,
+        { originalname: 'a.HEIC' } as any,
+        cb,
+      );
+      photoCreateUploadOptions.fileFilter(
+        {} as any,
+        { originalname: 'IMG.JPG' } as any,
+        cb,
+      );
+      expect(cb.mock.calls).toEqual([
+        [null, false],
+        [null, true],
+      ]);
+    });
+    it('uploadsDir defaults to ./uploads and honours UPLOADS_DIR', () => {
+      const saved = process.env.UPLOADS_DIR;
+      try {
+        delete process.env.UPLOADS_DIR;
+        expect(uploadsDir()).toBe('./uploads');
+        process.env.UPLOADS_DIR = '/tmp/elsewhere';
+        expect(uploadsDir()).toBe('/tmp/elsewhere');
+      } finally {
+        if (saved === undefined) delete process.env.UPLOADS_DIR;
+        else process.env.UPLOADS_DIR = saved;
+      }
+    });
+    it('storage destination is UPLOADS_DIR, created on demand', async () => {
+      const base = await fs.mkdtemp(path.join(os.tmpdir(), 'dest-'));
+      const dir = path.join(base, 'nested');
+      process.env.UPLOADS_DIR = dir;
+      try {
+        const [err, dest] = await new Promise<any[]>((res) =>
+          (photoUploadOptions.storage as any).getDestination(
+            {},
+            {},
+            (...a: any[]) => res(a),
+          ),
+        );
+        expect(err).toBeNull();
+        expect(dest).toBe(dir);
+        await expect(fs.stat(dir)).resolves.toBeTruthy();
+      } finally {
+        delete process.env.UPLOADS_DIR;
+        await fs.rm(base, { recursive: true, force: true });
+      }
+    });
+    it('storage filename callback errors for a disallowed extension', () => {
+      const cb = jest.fn();
+      (photoUploadOptions.storage as any).getFilename(
+        {},
+        { originalname: 'a.pdf' },
+        cb,
+      );
+      expect(cb.mock.calls[0][0]).toBeInstanceOf(Error);
+    });
+  });
+
+  describe('deletePhotoFiles', () => {
+    let base: string;
+    let root: string;
+    const never = async () => false;
+    const exists = (p: string) =>
+      fs.access(p).then(
+        () => true,
+        () => false,
+      );
+
+    beforeEach(async () => {
+      base = await fs.mkdtemp(path.join(os.tmpdir(), 'photos-'));
+      root = path.join(base, 'uploads');
+      await fs.mkdir(root);
+    });
+    afterEach(() => fs.rm(base, { recursive: true, force: true }));
+
+    it('deletes an unreferenced file', async () => {
+      await fs.writeFile(path.join(root, 'a.jpg'), 'x');
+      await deletePhotoFiles(['a.jpg'], never, root, jest.fn());
+      expect(await exists(path.join(root, 'a.jpg'))).toBe(false);
+    });
+
+    it('keeps a referenced file', async () => {
+      await fs.writeFile(path.join(root, 'a.jpg'), 'x');
+      await deletePhotoFiles(['a.jpg'], async () => true, root, jest.fn());
+      expect(await exists(path.join(root, 'a.jpg'))).toBe(true);
+    });
+
+    it('refuses ../ traversal and logs', async () => {
+      const outside = path.join(base, 'outside.txt');
+      await fs.writeFile(outside, 'x');
+      const log = jest.fn();
+      await deletePhotoFiles(['../outside.txt'], never, root, log);
+      expect(await exists(outside)).toBe(true);
+      expect(log).toHaveBeenCalled();
+    });
+
+    it('refuses absolute paths outside the root', async () => {
+      const outside = path.join(base, 'abs.txt');
+      await fs.writeFile(outside, 'x');
+      const log = jest.fn();
+      await deletePhotoFiles([outside], never, root, log);
+      expect(await exists(outside)).toBe(true);
+      expect(log).toHaveBeenCalled();
+    });
+
+    it('refuses the root itself and sibling dirs sharing its prefix', async () => {
+      const sibling = path.join(base, 'uploads-backup');
+      await fs.mkdir(sibling);
+      await fs.writeFile(path.join(sibling, 'a.jpg'), 'x');
+      const log = jest.fn();
+      await deletePhotoFiles(
+        ['../uploads-backup/a.jpg', '', '.'],
+        never,
+        root,
+        log,
+      );
+      expect(await exists(path.join(sibling, 'a.jpg'))).toBe(true);
+      expect(await exists(root)).toBe(true);
+    });
+
+    it('refuses a path through a directory symlink', async () => {
+      const outsideDir = path.join(base, 'outsidedir');
+      await fs.mkdir(outsideDir);
+      await fs.writeFile(path.join(outsideDir, 'victim'), 'x');
+      await fs.symlink(outsideDir, path.join(root, 'dirlink'));
+      const log = jest.fn();
+      await deletePhotoFiles(['dirlink/victim'], never, root, log);
+      expect(await exists(path.join(outsideDir, 'victim'))).toBe(true);
+      expect(log).toHaveBeenCalled();
+    });
+
+    it('refuses non-bare names even when unreferenced', async () => {
+      await fs.writeFile(path.join(root, 'a.jpg'), 'x');
+      const log = jest.fn();
+      await deletePhotoFiles(
+        ['./a.jpg', 'x/../a.jpg', 'x\\a.jpg'],
+        never,
+        root,
+        log,
+      );
+      expect(await exists(path.join(root, 'a.jpg'))).toBe(true);
+      expect(log).toHaveBeenCalledTimes(3);
+    });
+
+    it('does not throw for a missing file and logs', async () => {
+      const log = jest.fn();
+      await expect(
+        deletePhotoFiles(['missing.jpg'], never, root, log),
+      ).resolves.toBeUndefined();
+      expect(log).toHaveBeenCalled();
+    });
+
+    it('does not throw when isReferenced fails, and keeps the file', async () => {
+      await fs.writeFile(path.join(root, 'a.jpg'), 'x');
+      const log = jest.fn();
+      await deletePhotoFiles(
+        ['a.jpg'],
+        async () => {
+          throw new Error('db down');
+        },
+        root,
+        log,
+      );
+      expect(await exists(path.join(root, 'a.jpg'))).toBe(true);
+      expect(log).toHaveBeenCalled();
+    });
+
+    it('continues after a failure on one path', async () => {
+      await fs.writeFile(path.join(root, 'b.jpg'), 'x');
+      await deletePhotoFiles(['../x', 'b.jpg'], never, root, jest.fn());
+      expect(await exists(path.join(root, 'b.jpg'))).toBe(false);
+    });
+  });
+});
