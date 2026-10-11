@@ -6,6 +6,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
 import { AccountService } from 'src/account/account.service';
+import { PersonalAccountService } from 'src/account/personal-account.service';
 import { assertAccountRef } from 'src/shared/account-ref';
 import { CreateBillPhotoDto } from './dto/create-bill-photo.dto';
 import { CreateBillDto } from './dto/create-bill.dto';
@@ -33,6 +34,7 @@ export class BillService {
     private billPhotoRepository: Repository<BillPhoto>,
     private dataSource: DataSource,
     private accountService: AccountService,
+    private personalAccounts: PersonalAccountService,
   ) {}
 
   /** A target account must be one the user belongs to; null means personal. */
@@ -40,7 +42,11 @@ export class BillService {
     await assertAccountRef(account, userId, this.accountService);
   }
 
-  create(createBillDto: CreateBillDto) {
+  /** No account (the current web app, or the subscription cron) means the creator's Personal account. */
+  async create(createBillDto: CreateBillDto) {
+    if (createBillDto.account == null && createBillDto.user?.id != null) {
+      createBillDto.account = await this.personalAccounts.ensurePersonal(createBillDto.user.id);
+    }
     return this.billRepository.save(createBillDto);
   }
 
@@ -127,6 +133,9 @@ export class BillService {
     try {
       const bill = await this.getOwnedBill(id, userId);
       await this.assertTargetAccount(dto.account, userId);
+      if (dto.account === null) {
+        dto.account = await this.personalAccounts.ensurePersonal(bill.user?.id ?? userId);
+      }
 
       const removeIds = [...new Set(dto.removePhotoIds ?? [])];
       const photos = bill.photos ?? [];

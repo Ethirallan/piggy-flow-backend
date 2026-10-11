@@ -4,6 +4,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AccountService } from 'src/account/account.service';
+import { PersonalAccountService } from 'src/account/personal-account.service';
 import { assertAccountRef } from 'src/shared/account-ref';
 import { Subscription } from './entities/subscription.entity';
 
@@ -15,9 +16,14 @@ export class SubscriptionService {
     @InjectRepository(Subscription)
     private subscriptionRepository: Repository<Subscription>,
     private accountService: AccountService,
+    private personalAccounts: PersonalAccountService,
   ) { }
 
-  create(createSubscriptionDto: CreateSubscriptionDto) {
+  /** No account (the current web app) means the creator's Personal account. */
+  async create(createSubscriptionDto: CreateSubscriptionDto) {
+    if (createSubscriptionDto.account == null && createSubscriptionDto.user?.id != null) {
+      createSubscriptionDto.account = await this.personalAccounts.ensurePersonal(createSubscriptionDto.user.id);
+    }
     return this.subscriptionRepository.save(createSubscriptionDto);
   }
 
@@ -72,13 +78,16 @@ export class SubscriptionService {
   }
 
   async updateOwned(id: number, userId: number | undefined, dto: UpdateSubscriptionDto) {
-    await this.getOwned(id, userId);
+    const subscription = await this.getOwned(id, userId);
     const changes: Partial<Subscription> = {};
     for (const key of UPDATABLE_FIELDS) {
       if (key in dto && (dto as any)[key] !== undefined) (changes as any)[key] = (dto as any)[key];
     }
     if (Object.keys(changes).length === 0) return;
     await this.assertTargetAccount(changes.account, userId);
+    if (changes.account === null) {
+      changes.account = await this.personalAccounts.ensurePersonal(subscription.user?.id ?? userId);
+    }
     return this.subscriptionRepository.update(id, changes);
   }
 

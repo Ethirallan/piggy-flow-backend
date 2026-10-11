@@ -6,6 +6,7 @@ import * as os from 'node:os';
 import * as nodePath from 'node:path';
 import { DataSource, In } from 'typeorm';
 import { AccountService } from '../account/account.service';
+import { PersonalAccountService } from '../account/personal-account.service';
 import { BillService } from './bill.service';
 import { Bill } from './entities/bill.entity';
 import { BillPhoto } from './entities/bill_photo.entity';
@@ -24,6 +25,7 @@ describe('BillService', () => {
   let manager: { update: jest.Mock; delete: jest.Mock; insert: jest.Mock };
   let dataSource: { transaction: jest.Mock };
   let accounts: { assertMember: jest.Mock };
+  let personal: { ensurePersonal: jest.Mock };
 
   const bill = (over: any = {}) => ({
     id: 5,
@@ -49,6 +51,7 @@ describe('BillService', () => {
     };
     dataSource = { transaction: jest.fn((cb) => cb(manager)) };
     accounts = { assertMember: jest.fn().mockResolvedValue({}) };
+    personal = { ensurePersonal: jest.fn().mockResolvedValue({ id: 3 }) };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         BillService,
@@ -56,9 +59,26 @@ describe('BillService', () => {
         { provide: getRepositoryToken(BillPhoto), useValue: photos },
         { provide: DataSource, useValue: dataSource },
         { provide: AccountService, useValue: accounts },
+        { provide: PersonalAccountService, useValue: personal },
       ],
     }).compile();
     service = module.get<BillService>(BillService);
+  });
+
+  describe('create', () => {
+    beforeEach(() => ((bills as any).save = jest.fn().mockResolvedValue({ id: 1 })));
+
+    it.each([[null], [undefined]])('defaults account %j to the creator\'s Personal account', async (account) => {
+      await service.create({ user: { id: 7 }, account, price: 1 } as any);
+      expect(personal.ensurePersonal).toHaveBeenCalledWith(7);
+      expect((bills as any).save).toHaveBeenCalledWith(expect.objectContaining({ account: { id: 3 }, price: 1 }));
+    });
+
+    it('keeps a given account', async () => {
+      await service.create({ user: { id: 7 }, account: { id: 9 } } as any);
+      expect(personal.ensurePersonal).not.toHaveBeenCalled();
+      expect((bills as any).save).toHaveBeenCalledWith(expect.objectContaining({ account: { id: 9 } }));
+    });
   });
 
   describe('getOwnedBill', () => {
@@ -260,9 +280,23 @@ describe('BillService', () => {
       await service.updateWithPhotos(5, 1, { account: { id: 8 } } as any, []);
       expect(accounts.assertMember).toHaveBeenCalledWith(8, 1);
       expect(manager.update).toHaveBeenCalledWith(expect.anything(), 5, { account: { id: 8 } });
+      expect(personal.ensurePersonal).not.toHaveBeenCalled();
       accounts.assertMember.mockClear();
       await service.updateWithPhotos(5, 1, { account: null } as any, []);
       expect(accounts.assertMember).not.toHaveBeenCalled();
+    });
+
+    it('defaults an explicit null account to the bill creator\'s Personal account', async () => {
+      // Member 2 edits a bill created by user 1.
+      await service.updateWithPhotos(5, 2, { account: null } as any, []);
+      expect(personal.ensurePersonal).toHaveBeenCalledWith(1);
+      expect(manager.update).toHaveBeenCalledWith(expect.anything(), 5, { account: { id: 3 } });
+    });
+
+    it('leaves the account alone when the dto has no account', async () => {
+      await service.updateWithPhotos(5, 1, { price: 4 } as any, []);
+      expect(personal.ensurePersonal).not.toHaveBeenCalled();
+      expect(manager.update).toHaveBeenCalledWith(expect.anything(), 5, { price: 4 });
     });
 
     it('returns 404 for a stranger and deletes the new files', async () => {

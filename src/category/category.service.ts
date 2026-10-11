@@ -1,5 +1,6 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { PersonalAccountService } from 'src/account/personal-account.service';
 import { Repository } from 'typeorm';
 import { Bill } from 'src/bill/entities/bill.entity';
 import { Subscription } from 'src/subscription/entities/subscription.entity';
@@ -17,10 +18,15 @@ export class CategoryService {
     private billRepository: Repository<Bill>,
     @InjectRepository(Subscription)
     private subscriptionRepository: Repository<Subscription>,
+    private personalAccounts: PersonalAccountService,
   ) { }
 
-  create(createCategoryDto: CreateCategoryDto) {
-    return this.categoryRepository.save(createCategoryDto);
+  /** Until clients can pick one, a new category always goes into the creator's Personal account. */
+  async create(createCategoryDto: CreateCategoryDto) {
+    const userId = createCategoryDto.user?.id;
+    if (userId == null) throw new NotFoundException();
+    const account = await this.personalAccounts.ensurePersonal(userId);
+    return this.categoryRepository.save({ ...createCategoryDto, account });
   }
 
   getCategoriesByUserId(id: number) {

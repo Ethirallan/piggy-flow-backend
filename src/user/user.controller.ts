@@ -1,4 +1,5 @@
 import { Controller, Get, Body, Patch, ParseIntPipe, Param, Req, NotFoundException } from '@nestjs/common';
+import { PersonalAccountService } from 'src/account/personal-account.service';
 import { UserService } from './user.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -6,7 +7,10 @@ import { User } from './entities/user.entity';
 
 @Controller('user')
 export class UserController {
-  constructor(private readonly userService: UserService) {}
+  constructor(
+    private readonly userService: UserService,
+    private readonly personalAccounts: PersonalAccountService,
+  ) {}
 
   @Get('getUserById/:id')
   getUserData(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
@@ -32,9 +36,15 @@ export class UserController {
       newUser.displayName = fireUser.name??fireUser.email;
 
       await this.userService.create(newUser);
-      return this.userService.getUserByUid(fireUser.uid);
+      return this.withPersonalAccount(await this.userService.getUserByUid(fireUser.uid));
     } else {
-      return this.userService.getUserByUid(user.uid);
+      return this.withPersonalAccount(await this.userService.getUserByUid(user.uid));
     }
+  }
+
+  /** Every user who logs in gets a Personal account; returns the user unchanged. */
+  private async withPersonalAccount(user: User | null) {
+    if (user) await this.personalAccounts.ensurePersonal(user.id);
+    return user;
   }
 }

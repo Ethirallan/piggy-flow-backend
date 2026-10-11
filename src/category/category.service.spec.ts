@@ -1,4 +1,5 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
+import { PersonalAccountService } from 'src/account/personal-account.service';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Bill } from 'src/bill/entities/bill.entity';
@@ -8,7 +9,8 @@ import { Category } from './entities/category.entity';
 
 describe('CategoryService', () => {
   let service: CategoryService;
-  const repo = { findOne: jest.fn(), update: jest.fn(), delete: jest.fn() };
+  const repo = { findOne: jest.fn(), update: jest.fn(), delete: jest.fn(), save: jest.fn() };
+  const personal = { ensurePersonal: jest.fn() };
   const bills = { count: jest.fn() };
   const subs = { count: jest.fn() };
 
@@ -20,6 +22,7 @@ describe('CategoryService', () => {
         { provide: getRepositoryToken(Category), useValue: repo },
         { provide: getRepositoryToken(Bill), useValue: bills },
         { provide: getRepositoryToken(Subscription), useValue: subs },
+        { provide: PersonalAccountService, useValue: personal },
       ],
     }).compile();
     service = module.get<CategoryService>(CategoryService);
@@ -27,6 +30,25 @@ describe('CategoryService', () => {
 
   it('should be defined', () => {
     expect(service).toBeDefined();
+  });
+
+  describe('create', () => {
+    it.each([[undefined], [null], [{ id: 77 }]])(
+      'saves into the creator\'s Personal account (body account %j ignored)',
+      async (account) => {
+        personal.ensurePersonal.mockResolvedValue({ id: 3 });
+        repo.save.mockResolvedValue({ id: 1 });
+        await service.create({ name: 'x', user: { id: 7 }, account } as any);
+        expect(personal.ensurePersonal).toHaveBeenCalledWith(7);
+        expect(repo.save).toHaveBeenCalledWith(expect.objectContaining({ name: 'x', account: { id: 3 } }));
+      },
+    );
+
+    it('gives 404 without a user and saves nothing', async () => {
+      await expect(service.create({ name: 'x', user: null } as any)).rejects.toBeInstanceOf(NotFoundException);
+      expect(personal.ensurePersonal).not.toHaveBeenCalled();
+      expect(repo.save).not.toHaveBeenCalled();
+    });
   });
 
   describe('getOwned', () => {

@@ -1,5 +1,6 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { PersonalAccountService } from 'src/account/personal-account.service';
 import { Repository } from 'typeorm';
 import { Bill } from 'src/bill/entities/bill.entity';
 import { Subscription } from 'src/subscription/entities/subscription.entity';
@@ -17,10 +18,15 @@ export class ShopService {
     private billRepository: Repository<Bill>,
     @InjectRepository(Subscription)
     private subscriptionRepository: Repository<Subscription>,
+    private personalAccounts: PersonalAccountService,
   ) { }
 
-  create(createShopDto: CreateShopDto) {
-    return this.shopRepository.save(createShopDto);
+  /** Until clients can pick one, a new shop always goes into the creator's Personal account. */
+  async create(createShopDto: CreateShopDto) {
+    const userId = createShopDto.user?.id;
+    if (userId == null) throw new NotFoundException();
+    const account = await this.personalAccounts.ensurePersonal(userId);
+    return this.shopRepository.save({ ...createShopDto, account });
   }
 
   getShopsByUserId(id: number) {
