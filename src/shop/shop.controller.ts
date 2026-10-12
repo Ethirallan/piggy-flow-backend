@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Req, ParseIntPipe, NotFoundException, Query, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Req, ParseIntPipe, NotFoundException, Query } from '@nestjs/common';
+import { parseAccountQuery } from 'src/shared/account-scoped';
 import { ShopService } from './shop.service';
 import { CreateShopDto } from './dto/create-shop.dto';
 import { UpdateShopDto } from './dto/update-shop.dto';
@@ -15,8 +16,7 @@ export class ShopController {
 
   @Get()
   list(@Req() req: any, @Query('account') account?: string) {
-    if (account !== undefined && !/^\d+$/.test(account)) throw new BadRequestException('Invalid account.');
-    return this.shopService.listForUser(req.user?.id, account === undefined ? undefined : Number(account));
+    return this.shopService.listForUser(req.user?.id, parseAccountQuery(account));
   }
 
   @Get('getShopsByUser')
@@ -32,12 +32,12 @@ export class ShopController {
   @Patch(':id')
   update(@Param('id', ParseIntPipe) id: number, @Req() req: any, @Body() updateShopDto: UpdateShopDto) {
     if (!req.user) throw new NotFoundException();
-    return this.shopService.updateOwned(id, req.user.id, updateShopDto);
+    return this.shopService.updateAsMember(id, req.user.id, updateShopDto);
   }
 
   @Delete(':id')
   remove(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     if (!req.user) throw new NotFoundException();
-    return this.shopService.removeOwned(id, req.user.id);
+    return this.shopService.removeAsMember(id, req.user.id);
   }
 }

@@ -1,6 +1,9 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { AccountService } from 'src/account/account.service';
 import { PersonalAccountService } from 'src/account/personal-account.service';
+import { assertAccountRef } from 'src/shared/account-ref';
+import { assertSomethingToUpdate, deleteOrInUse, hasNameClash, loadAsMember } from 'src/shared/account-scoped';
 import { Repository } from 'typeorm';
 import { Bill } from 'src/bill/entities/bill.entity';
 import { Subscription } from 'src/subscription/entities/subscription.entity';
@@ -19,44 +22,57 @@ export class CategoryService {
     @InjectRepository(Subscription)
     private subscriptionRepository: Repository<Subscription>,
     private personalAccounts: PersonalAccountService,
+    private accounts: AccountService,
   ) { }
 
-  /** Until clients can pick one, a new category always goes into the creator's Personal account. */
   async create(createCategoryDto: CreateCategoryDto) {
     const userId = createCategoryDto.user?.id;
     if (userId == null) throw new NotFoundException();
-    const account = await this.personalAccounts.ensurePersonal(userId);
-    return this.categoryRepository.save({ ...createCategoryDto, account });
-  }
-
-  getCategoriesByUserId(id: number) {
-    return this.categoryRepository.find({
-      where: {
-        user: { 
-          id: id 
-        } 
-      }
+    await assertAccountRef(createCategoryDto.account, userId, this.accounts);
+    const account = createCategoryDto.account ?? (await this.personalAccounts.ensurePersonal(userId));
+    const saved = await this.categoryRepository.save({
+      name: createCategoryDto.name,
+      emoji: createCategoryDto.emoji,
+      user: createCategoryDto.user,
+      account,
     });
+    return this.categoryRepository.findOne({ where: { id: saved.id }, relations: ['account'] });
   }
 
-  async getOwned(id: number, userId: number | undefined): Promise<Category> {
+  /** The categories of one account the user belongs to, or of all their accounts. */
+  async listForUser(userId: number | undefined, accountId?: number) {
+    if (accountId !== undefined) {
+      await this.accounts.assertMember(accountId, userId);
+      return this.categoryRepository.find({ where: { account: { id: accountId } }, relations: ['account'] });
+    }
     if (userId == null) throw new NotFoundException();
-    const category = await this.categoryRepository.findOne({ where: { id, user: { id: userId } } });
-    if (!category) throw new NotFoundException();
-    return category;
+    return this.categoryRepository.find({ where: { account: { users: { id: userId } } }, relations: ['account'] });
   }
 
-  async updateOwned(id: number, userId: number | undefined, dto: UpdateCategoryDto) {
-    await this.getOwned(id, userId);
+  async updateAsMember(id: number, userId: number | undefined, dto: UpdateCategoryDto) {
+    await loadAsMember(this.categoryRepository, id, userId, this.accounts);
+    assertSomethingToUpdate(dto.name, dto.emoji);
     return this.categoryRepository.update(id, { name: dto.name, emoji: dto.emoji });
   }
 
-  async removeOwned(id: number, userId: number | undefined) {
-    await this.getOwned(id, userId);
+  async removeAsMember(id: number, userId: number | undefined) {
+    await loadAsMember(this.categoryRepository, id, userId, this.accounts);
     const used =
       (await this.billRepository.count({ where: { category: { id } } })) +
       (await this.subscriptionRepository.count({ where: { category: { id } } }));
     if (used > 0) throw new ConflictException('In use');
-    return this.categoryRepository.delete(id);
+    return deleteOrInUse(() => this.categoryRepository.delete(id));
+  }
+
+  /** Copies a category (name and emoji) into another account the user belongs to. */
+  async copy(id: number, user: { id: number } | undefined, dto: { account?: unknown }) {
+    const source = await loadAsMember(this.categoryRepository, id, user?.id, this.accounts);
+    if (dto?.account == null) throw new BadRequestException('Invalid account.');
+    await assertAccountRef(dto.account, user.id, this.accounts);
+    const target = dto.account as { id: number };
+    const existing = await this.categoryRepository.find({ where: { account: { id: target.id } } });
+    if (hasNameClash(existing, source.name)) throw new ConflictException('Already exists');
+    const saved = await this.categoryRepository.save({ name: source.name, emoji: source.emoji, account: { id: target.id }, user });
+    return this.categoryRepository.findOne({ where: { id: saved.id }, relations: ['account'] });
   }
 }

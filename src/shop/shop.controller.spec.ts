@@ -7,7 +7,7 @@ import { ShopService } from './shop.service';
 describe('ShopController', () => {
   let app: INestApplication;
   let user: any;
-  const service = { create: jest.fn(), updateOwned: jest.fn(), removeOwned: jest.fn(), listForUser: jest.fn(), copy: jest.fn() };
+  const service = { create: jest.fn(), updateAsMember: jest.fn(), removeAsMember: jest.fn(), listForUser: jest.fn(), copy: jest.fn() };
 
   beforeEach(async () => {
     jest.resetAllMocks();
@@ -30,29 +30,29 @@ describe('ShopController', () => {
   afterEach(() => app.close());
 
   it('PATCH passes the request user id', async () => {
-    service.updateOwned.mockResolvedValue({ affected: 1 });
+    service.updateAsMember.mockResolvedValue({ affected: 1 });
     const res = await request(app.getHttpServer()).patch('/shop/5').send({ name: 'Lidl' });
     expect(res.status).toBe(200);
-    expect(service.updateOwned).toHaveBeenCalledWith(5, 7, { name: 'Lidl' });
+    expect(service.updateAsMember).toHaveBeenCalledWith(5, 7, { name: 'Lidl' });
   });
 
   it('DELETE passes the request user id', async () => {
-    service.removeOwned.mockResolvedValue({ affected: 1 });
+    service.removeAsMember.mockResolvedValue({ affected: 1 });
     const res = await request(app.getHttpServer()).delete('/shop/5');
     expect(res.status).toBe(200);
-    expect(service.removeOwned).toHaveBeenCalledWith(5, 7);
+    expect(service.removeAsMember).toHaveBeenCalledWith(5, 7);
   });
 
   it('PATCH and DELETE give 404 when there is no user', async () => {
     user = undefined;
     expect((await request(app.getHttpServer()).patch('/shop/5').send({ name: 'x' })).status).toBe(404);
     expect((await request(app.getHttpServer()).delete('/shop/5')).status).toBe(404);
-    expect(service.updateOwned).not.toHaveBeenCalled();
-    expect(service.removeOwned).not.toHaveBeenCalled();
+    expect(service.updateAsMember).not.toHaveBeenCalled();
+    expect(service.removeAsMember).not.toHaveBeenCalled();
   });
 
   it('a 409 from the service reaches the client', async () => {
-    service.removeOwned.mockRejectedValue(new ConflictException('In use'));
+    service.removeAsMember.mockRejectedValue(new ConflictException('In use'));
     const res = await request(app.getHttpServer()).delete('/shop/5');
     expect(res.status).toBe(409);
     expect(res.body.message).toBe('In use');
@@ -96,13 +96,13 @@ describe('ShopController', () => {
   it('PATCH with an empty name gives 400 before the service', async () => {
     const res = await request(app.getHttpServer()).patch('/shop/5').send({ name: '' });
     expect(res.status).toBe(400);
-    expect(service.updateOwned).not.toHaveBeenCalled();
+    expect(service.updateAsMember).not.toHaveBeenCalled();
   });
 
   it('PATCH with a whitespace-only name passes the pipe (IsNotEmpty only rejects \'\') and is left to the service', async () => {
-    service.updateOwned.mockResolvedValue({ affected: 1 });
+    service.updateAsMember.mockResolvedValue({ affected: 1 });
     const res = await request(app.getHttpServer()).patch('/shop/5').send({ name: '   ' });
     expect(res.status).toBe(200);
-    expect(service.updateOwned).toHaveBeenCalledWith(5, 7, { name: '   ' });
+    expect(service.updateAsMember).toHaveBeenCalledWith(5, 7, { name: '   ' });
   });
 });

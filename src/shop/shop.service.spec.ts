@@ -104,12 +104,12 @@ describe('ShopService', () => {
     });
   });
 
-  describe('updateOwned', () => {
+  describe('updateAsMember', () => {
     it('lets a member change the name only', async () => {
       shopIn();
       repo.update.mockResolvedValue({ affected: 1 });
       const dto: any = { name: 'Lidl', user: { id: 99 }, id: 99, account: { id: 1 } };
-      await service.updateOwned(5, 7, dto);
+      await service.updateAsMember(5, 7, dto);
       expect(repo.findOne).toHaveBeenCalledWith({ where: { id: 5 }, relations: ['account'] });
       expect(accounts.assertMember).toHaveBeenCalledWith(3, 7);
       expect(repo.update).toHaveBeenCalledWith(5, { name: 'Lidl' });
@@ -118,24 +118,24 @@ describe('ShopService', () => {
     it('gives 404 for a stranger without updating', async () => {
       shopIn();
       notMember();
-      await expect(service.updateOwned(5, 8, { name: 'x' })).rejects.toBeInstanceOf(NotFoundException);
+      await expect(service.updateAsMember(5, 8, { name: 'x' })).rejects.toBeInstanceOf(NotFoundException);
       expect(repo.update).not.toHaveBeenCalled();
     });
 
     it.each([[null], [{ id: 3 }]])('gives 404 for a missing shop or one without an account (%j)', async (account) => {
       repo.findOne.mockResolvedValue(account === null ? null : { id: 5, account: null });
-      await expect(service.updateOwned(5, 7, { name: 'x' })).rejects.toBeInstanceOf(NotFoundException);
+      await expect(service.updateAsMember(5, 7, { name: 'x' })).rejects.toBeInstanceOf(NotFoundException);
       expect(repo.update).not.toHaveBeenCalled();
     });
 
     it('gives 404 for a missing user without querying', async () => {
-      await expect(service.updateOwned(5, undefined, { name: 'x' })).rejects.toBeInstanceOf(NotFoundException);
+      await expect(service.updateAsMember(5, undefined, { name: 'x' })).rejects.toBeInstanceOf(NotFoundException);
       expect(repo.findOne).not.toHaveBeenCalled();
     });
 
     it.each([[{}], [{ name: undefined }], [{ name: '   ' }]])('gives 400 Nothing to update for %j', async (dto) => {
       shopIn();
-      await expect(service.updateOwned(5, 7, dto as any)).rejects.toMatchObject({
+      await expect(service.updateAsMember(5, 7, dto as any)).rejects.toMatchObject({
         status: 400,
         message: 'Nothing to update.',
       });
@@ -143,14 +143,14 @@ describe('ShopService', () => {
     });
   });
 
-  describe('removeOwned', () => {
+  describe('removeAsMember', () => {
     beforeEach(() => shopIn());
 
     it('deletes when no bill or subscription uses it', async () => {
       bills.count.mockResolvedValue(0);
       subs.count.mockResolvedValue(0);
       repo.delete.mockResolvedValue({ affected: 1 });
-      await expect(service.removeOwned(5, 7)).resolves.toEqual({ affected: 1 });
+      await expect(service.removeAsMember(5, 7)).resolves.toEqual({ affected: 1 });
       expect(accounts.assertMember).toHaveBeenCalledWith(3, 7);
       expect(bills.count).toHaveBeenCalledWith({ where: { shop: { id: 5 } } });
       expect(subs.count).toHaveBeenCalledWith({ where: { shop: { id: 5 } } });
@@ -160,7 +160,7 @@ describe('ShopService', () => {
     it.each([[1, 0], [0, 2]])('gives 409 when bills=%i subscriptions=%i', async (b, s) => {
       bills.count.mockResolvedValue(b);
       subs.count.mockResolvedValue(s);
-      await expect(service.removeOwned(5, 7)).rejects.toBeInstanceOf(ConflictException);
+      await expect(service.removeAsMember(5, 7)).rejects.toBeInstanceOf(ConflictException);
       expect(repo.delete).not.toHaveBeenCalled();
     });
 
@@ -168,25 +168,25 @@ describe('ShopService', () => {
       bills.count.mockResolvedValue(0);
       subs.count.mockResolvedValue(0);
       repo.delete.mockRejectedValue(Object.assign(new Error('fk'), { driverError: { errno: 1451 } }));
-      await expect(service.removeOwned(5, 7)).rejects.toMatchObject({ status: 409, message: 'In use' });
+      await expect(service.removeAsMember(5, 7)).rejects.toMatchObject({ status: 409, message: 'In use' });
     });
 
     it('rethrows other delete errors', async () => {
       bills.count.mockResolvedValue(0);
       subs.count.mockResolvedValue(0);
       repo.delete.mockRejectedValue(new Error('boom'));
-      await expect(service.removeOwned(5, 7)).rejects.toThrow('boom');
+      await expect(service.removeAsMember(5, 7)).rejects.toThrow('boom');
     });
 
     it('gives 404 for a stranger without counting', async () => {
       notMember();
-      await expect(service.removeOwned(5, 8)).rejects.toBeInstanceOf(NotFoundException);
+      await expect(service.removeAsMember(5, 8)).rejects.toBeInstanceOf(NotFoundException);
       expect(bills.count).not.toHaveBeenCalled();
       expect(repo.delete).not.toHaveBeenCalled();
     });
 
     it('gives 404 for a missing user', async () => {
-      await expect(service.removeOwned(5, undefined)).rejects.toBeInstanceOf(NotFoundException);
+      await expect(service.removeAsMember(5, undefined)).rejects.toBeInstanceOf(NotFoundException);
       expect(repo.delete).not.toHaveBeenCalled();
     });
   });
