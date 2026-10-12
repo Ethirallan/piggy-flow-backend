@@ -37,3 +37,6 @@ lerna-debug.log*
 
 .env
 firebase.json
+
+# account migration logs (production ids and totals)
+/.migration/

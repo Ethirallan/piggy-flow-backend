@@ -27,6 +27,9 @@ describe('migrate-accounts CLI', () => {
       yes: false,
       logs: ['a', 'b'],
     });
+    expect(
+      parseArgs(['--rollback', 'a', '--yes-i-have-a-backup']),
+    ).toMatchObject({ mode: 'rollback', yes: true, logs: ['a'] });
   });
 
   it('rejects unknown, conflicting or misplaced flags', () => {
@@ -48,5 +51,12 @@ describe('migrate-accounts CLI', () => {
   it('refuses --run without the backup flag, before touching the database', async () => {
     expect(await main(['--run'])).toBe(1);
     expect(err.mock.calls[0][0]).toMatch(/Refusing[\s\S]*mysqldump/);
+  });
+
+  it('refuses --rollback without the backup flag', async () => {
+    expect(await main(['--rollback', 'a.jsonl'])).toBe(1);
+    expect(err.mock.calls[0][0]).toMatch(
+      /Refusing to roll back[\s\S]*mysqldump/,
+    );
   });
 });

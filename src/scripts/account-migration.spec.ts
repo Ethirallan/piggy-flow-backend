@@ -893,7 +893,7 @@ describe('account migration: verify, rollback and duplicates', () => {
     expect(res.skipped).toBe(1);
     expect(store.data.bill[0].accountId).toBe(2);
     expect(store.data.subscription[0].accountId).toBeNull();
-    expect(await rollback(store, [logFile])).toEqual({
+    expect(await rollback(store, [logFile])).toMatchObject({
       restored: 0,
       skipped: res.restored + res.skipped,
     });
@@ -916,12 +916,84 @@ describe('account migration: verify, rollback and duplicates', () => {
     store.onWrite = undefined;
     store.data.bill.push(bill(2, 1, null));
     await runMigration(store, second);
-    expect(await rollback(store, [first, second])).toEqual({
+    expect(await rollback(store, [first, second])).toMatchObject({
       restored: 3,
       skipped: 0,
     });
     expect(store.data.bill.map((b) => b.accountId)).toEqual([null, null]);
     expect(store.data.shop[0].accountId).toBeNull();
+  });
+
+  it('flags null accounts on shops and categories and a category in another account', async () => {
+    const store = new MemStore({
+      users: [{ id: 1 }],
+      accounts: [
+        { id: 1, name: 'Personal', personal: true, members: [1] },
+        { id: 2, name: 'Work', personal: false, members: [1] },
+      ],
+      bill: [{ ...bill(1, 1, 1), categoryId: 1 }],
+      shop: [lidl(1, 1)],
+      category: [{ id: 1, userId: 1, accountId: 1, name: 'Food' }],
+    });
+    await runMigration(store, logFile);
+    store.data.shop[0].accountId = null;
+    store.data.category[0].accountId = 2;
+    store.data.category.push({
+      id: 2,
+      userId: 1,
+      accountId: null,
+      name: 'Fun',
+    });
+    expect((await verify(store, [logFile])).problems).toEqual([
+      'shop 1 has no account',
+      'category 2 has no account',
+      'bill 1 is in account 1 but its category 1 is in account 2',
+    ]);
+  });
+
+  it('does not restore a duplicate Personal renamed since the run', async () => {
+    const store = new MemStore({
+      users: [{ id: 1 }],
+      accounts: [
+        { id: 1, name: 'Personal', personal: true, members: [1] },
+        { id: 3, name: 'Old Personal', personal: true, members: [1] },
+      ],
+    });
+    await runMigration(store, logFile);
+    store.data.accounts[1].name = 'Savings';
+    const res = await rollback(store, [logFile]);
+    expect(res.skippedIntents).toEqual([
+      expect.objectContaining({ kind: 'dedupe-personal', extra: 3 }),
+    ]);
+    expect(store.data.accounts[1]).toMatchObject({
+      name: 'Savings',
+      personal: false,
+    });
+  });
+
+  it('is harmless when a rerun repeats an intent that never committed', async () => {
+    const dir = path.dirname(logFile);
+    const first = path.join(dir, 'accounts-1.jsonl');
+    const second = path.join(dir, 'accounts-2.jsonl');
+    const store = new MemStore({
+      users: [{ id: 1 }],
+      accounts: [{ id: 1, name: 'Personal', personal: true, members: [1] }],
+      bill: [bill(1, 1, null)],
+    });
+    store.onWrite = () => 'throw';
+    await expect(runMigration(store, first)).rejects.toThrow(/failed/);
+    store.onWrite = undefined;
+    await runMigration(store, second);
+    const intents = async (f: string) =>
+      (await fs.readFile(f, 'utf8'))
+        .split('\n')
+        .filter((l) => l.includes('"intent"'));
+    expect(await intents(first)).toEqual(await intents(second));
+    expect(await rollback(store, [first, second])).toMatchObject({
+      restored: 1,
+      skipped: 1,
+    });
+    expect(store.data.bill[0].accountId).toBeNull();
   });
 
   it('lists same-name shops the plan puts in one account', async () => {

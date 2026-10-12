@@ -623,17 +623,43 @@ export async function verify(
 export async function rollback(
   store: AccountsStore,
   logFiles: string[],
-): Promise<{ restored: number; skipped: number }> {
+): Promise<{ restored: number; skipped: number; skippedIntents: Action[] }> {
   let restored = 0;
-  let skipped = 0;
+  const skippedIntents: Action[] = [];
   for (const file of oldestFirst(logFiles).reverse()) {
     for (const line of (await readLog(file)).reverse()) {
       if (line.kind !== 'intent') continue;
       if (await undo(store, line.action)) restored++;
-      else skipped++;
+      else skippedIntents.push(line.action);
     }
   }
-  return { restored, skipped };
+  return { restored, skipped: skippedIntents.length, skippedIntents };
+}
+
+/** The row and column an intent's undo checks, and the value it expects there. */
+export function undoTarget(a: Action): {
+  table: RefTable | Table | 'account';
+  id: number;
+  column: string;
+  expected: number | string;
+} {
+  switch (a.kind) {
+    case 'dedupe-personal':
+      return {
+        table: 'account',
+        id: a.extra,
+        column: 'name',
+        expected: DUPLICATE_PERSONAL_NAME,
+      };
+    case 'repoint':
+      return { table: a.table, id: a.id, column: a.field, expected: a.to };
+    case 'dedupe-move':
+    case 'ref-account':
+    case 'list-account':
+      return { table: a.table, id: a.id, column: 'accountId', expected: a.to };
+    default:
+      throw new Error(`Unexpected intent: ${a.kind}`);
+  }
 }
 
 function undo(store: AccountsStore, a: Action): Promise<boolean> {

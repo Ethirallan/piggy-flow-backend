@@ -15,6 +15,7 @@ import {
   planMigration,
   rollback,
   runMigration,
+  undoTarget,
   verify,
 } from './account-migration';
 
@@ -33,12 +34,15 @@ Modes:
                                  one Personal account and that per-user bill
                                  totals match the earliest log. Exits 1 on any
                                  problem.
-  --rollback <log> [<log>...]    Undo the logged writes, newest first, where the
-                                 row still has the migrated value. Created
-                                 Personal accounts and copies are kept.
+  --rollback <log> [<log>...] --yes-i-have-a-backup
+                                 Undo the logged writes, newest first, where the
+                                 row still has the migrated value; list the rows
+                                 skipped. Created Personal accounts and copies
+                                 are kept.
   --help                         Show this help.
 
 Without --log, --verify reads every ./.migration/accounts-*.jsonl.
+Don't rename the log files: verify and rollback order them by name.
 
 Database: DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD (from the environment
 or .env).`;
@@ -89,13 +93,20 @@ export function parseArgs(argv: string[]): Args {
   if (args.includes('--log') && mode !== 'verify') {
     throw new UsageError('--log only goes with --verify.');
   }
-  if (yes && mode !== 'run') {
-    throw new UsageError('--yes-i-have-a-backup only goes with --run.');
+  if (yes && mode !== 'run' && mode !== 'rollback') {
+    throw new UsageError(
+      '--yes-i-have-a-backup only goes with --run or --rollback.',
+    );
   }
   return { mode, yes, logs };
 }
 
-/** Raw parameterised SQL. Table and column names only come from the code. */
+/**
+ * Raw parameterised SQL. Table and column names only come from the code.
+ * Every UPDATE keeps `lastUpdate` (ON UPDATE CURRENT_TIMESTAMP on account,
+ * bill, subscription, shop and category), so the migration and its rollback
+ * leave last-edit times alone.
+ */
 export function sqlStore(ds: DataSource): AccountsStore {
   const update = async (sql: string, params: unknown[]) =>
     (await ds.query(sql, params)).affectedRows === 1;
@@ -128,26 +139,24 @@ export function sqlStore(ds: DataSource): AccountsStore {
       }),
     clearPersonal: (id, expectedName) =>
       update(
-        'UPDATE account SET personal = 0, name = ? WHERE id = ? AND personal = 1 AND name <=> ?',
+        'UPDATE account SET personal = 0, name = ?, lastUpdate = lastUpdate WHERE id = ? AND personal = 1 AND name <=> ?',
         [DUPLICATE_PERSONAL_NAME, id, expectedName],
       ),
     restorePersonal: (id, name) =>
       update(
-        'UPDATE account SET personal = 1, name = ? WHERE id = ? AND personal = 0 AND name <=> ?',
+        'UPDATE account SET personal = 1, name = ?, lastUpdate = lastUpdate WHERE id = ? AND personal = 0 AND name <=> ?',
         [name, id, DUPLICATE_PERSONAL_NAME],
       ),
     setRefAccount: (t, id, expected, accountId) =>
-      update(`UPDATE ${t} SET accountId = ? WHERE id = ? AND accountId <=> ?`, [
-        accountId,
-        id,
-        expected,
-      ]),
+      update(
+        `UPDATE ${t} SET accountId = ?, lastUpdate = lastUpdate WHERE id = ? AND accountId <=> ?`,
+        [accountId, id, expected],
+      ),
     setListAccount: (t, id, expected, accountId) =>
-      update(`UPDATE ${t} SET accountId = ? WHERE id = ? AND accountId <=> ?`, [
-        accountId,
-        id,
-        expected,
-      ]),
+      update(
+        `UPDATE ${t} SET accountId = ?, lastUpdate = lastUpdate WHERE id = ? AND accountId <=> ?`,
+        [accountId, id, expected],
+      ),
     insertListCopy: async (t, s, accountId) =>
       (t === 'shop'
         ? await ds.query(
@@ -160,11 +169,10 @@ export function sqlStore(ds: DataSource): AccountsStore {
           )
       ).insertId,
     repoint: (t, id, field, expected, newId) =>
-      update(`UPDATE ${t} SET ${field} = ? WHERE id = ? AND ${field} <=> ?`, [
-        newId,
-        id,
-        expected,
-      ]),
+      update(
+        `UPDATE ${t} SET ${field} = ?, lastUpdate = lastUpdate WHERE id = ? AND ${field} <=> ?`,
+        [newId, id, expected],
+      ),
   };
 }
 
@@ -205,11 +213,14 @@ export async function main(argv: string[]): Promise<number> {
     console.log(USAGE);
     return 0;
   }
-  // Loads .env (when present) and the DB settings; connects only below.
+  // Importing data-source loads .env (when present), so the backup advice
+  // shows the real settings. It only connects at initialize() below.
   const ds: DataSource = (await import('../data-source')).default;
-  if (args.mode === 'run' && !args.yes) {
+  if ((args.mode === 'run' || args.mode === 'rollback') && !args.yes) {
     console.error(
-      `Refusing to run without --yes-i-have-a-backup.\n\n${backupAdvice()}`,
+      `Refusing to ${
+        args.mode === 'run' ? 'run' : 'roll back'
+      } without --yes-i-have-a-backup.\n\n${backupAdvice()}`,
     );
     return 1;
   }
@@ -286,7 +297,22 @@ export async function main(argv: string[]): Promise<number> {
       }
       case 'rollback': {
         const r = await rollback(store, args.logs);
-        console.log(`Restored ${r.restored}, skipped ${r.skipped}.`);
+        const details: string[] = [];
+        for (const a of r.skippedIntents) {
+          const t = undoTarget(a);
+          const [row] = await ds.query(
+            `SELECT ${t.column} AS v FROM ${t.table} WHERE id = ?`,
+            [t.id],
+          );
+          const now = row ? JSON.stringify(row.v) : 'row missing';
+          details.push(
+            `${t.table} ${t.id} ${t.column}: expected ${JSON.stringify(
+              t.expected,
+            )}, now ${now}`,
+          );
+        }
+        list('Skipped (value no longer the migrated one)', details);
+        console.log(`\nRestored ${r.restored}, skipped ${r.skipped}.`);
         return 0;
       }
     }
