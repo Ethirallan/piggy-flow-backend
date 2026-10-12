@@ -43,7 +43,12 @@ describe('ShopService', () => {
     it.each([[undefined], [null]])('saves into the creator\'s Personal account (body account %j)', async (account) => {
       personal.ensurePersonal.mockResolvedValue({ id: 3 });
       repo.save.mockResolvedValue({ id: 1 });
-      await service.create({ name: 'x', user: { id: 7 }, account } as any);
+      repo.findOne.mockResolvedValue({ id: 1, account: { id: 3, name: 'Personal', personal: true } });
+      await expect(service.create({ name: 'x', user: { id: 7 }, account } as any)).resolves.toEqual({
+        id: 1,
+        account: { id: 3, name: 'Personal', personal: true },
+      });
+      expect(repo.findOne).toHaveBeenCalledWith({ where: { id: 1 }, relations: ['account'] });
       expect(personal.ensurePersonal).toHaveBeenCalledWith(7);
       expect(repo.save).toHaveBeenCalledWith({ name: 'x', user: { id: 7 }, account: { id: 3 } });
     });
@@ -128,7 +133,7 @@ describe('ShopService', () => {
       expect(repo.findOne).not.toHaveBeenCalled();
     });
 
-    it.each([[{}], [{ name: '' }], [{ name: '   ' }], [{ name: 5 }]])('gives 400 Nothing to update for %j', async (dto) => {
+    it.each([[{}], [{ name: undefined }], [{ name: '   ' }]])('gives 400 Nothing to update for %j', async (dto) => {
       shopIn();
       await expect(service.updateOwned(5, 7, dto as any)).rejects.toMatchObject({
         status: 400,

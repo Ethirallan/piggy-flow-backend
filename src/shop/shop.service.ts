@@ -29,7 +29,8 @@ export class ShopService {
     if (userId == null) throw new NotFoundException();
     await assertAccountRef(createShopDto.account, userId, this.accounts);
     const account = createShopDto.account ?? (await this.personalAccounts.ensurePersonal(userId));
-    return this.shopRepository.save({ name: createShopDto.name, user: createShopDto.user, account });
+    const saved = await this.shopRepository.save({ name: createShopDto.name, user: createShopDto.user, account });
+    return this.shopRepository.findOne({ where: { id: saved.id }, relations: ['account'] });
   }
 
   /** The shops of one account the user belongs to, or of all their accounts. */

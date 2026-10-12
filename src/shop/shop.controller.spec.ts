@@ -1,4 +1,4 @@
-import { ConflictException, INestApplication } from '@nestjs/common';
+import { ConflictException, INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
 import { ShopController } from './shop.controller';
@@ -7,7 +7,7 @@ import { ShopService } from './shop.service';
 describe('ShopController', () => {
   let app: INestApplication;
   let user: any;
-  const service = { updateOwned: jest.fn(), removeOwned: jest.fn(), listForUser: jest.fn(), copy: jest.fn() };
+  const service = { create: jest.fn(), updateOwned: jest.fn(), removeOwned: jest.fn(), listForUser: jest.fn(), copy: jest.fn() };
 
   beforeEach(async () => {
     jest.resetAllMocks();
@@ -17,6 +17,8 @@ describe('ShopController', () => {
       providers: [{ provide: ShopService, useValue: service }],
     }).compile();
     app = module.createNestApplication();
+    // Same options as main.ts.
+    app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
     // Stand-in for the auth middleware.
     app.use((req: any, _res: any, next: () => void) => {
       req.user = user;
@@ -81,5 +83,26 @@ describe('ShopController', () => {
     const res = await request(app.getHttpServer()).post('/shop/5/copy').send({ account: { id: 9 } });
     expect(res.status).toBe(201);
     expect(service.copy).toHaveBeenCalledWith(5, { id: 7 }, { account: { id: 9 } });
+  });
+
+  it('POST keeps account: { id } through the whitelist and sets user from the request', async () => {
+    service.create.mockResolvedValue({ id: 1 });
+    const res = await request(app.getHttpServer()).post('/shop').send({ name: 'Lidl', account: { id: 9 }, id: 99, junk: 1 });
+    expect(res.status).toBe(201);
+    expect(service.create).toHaveBeenCalledWith(expect.objectContaining({ name: 'Lidl', account: { id: 9 }, user: { id: 7 } }));
+    expect(service.create.mock.calls[0][0]).not.toHaveProperty('junk');
+  });
+
+  it('PATCH with an empty name gives 400 before the service', async () => {
+    const res = await request(app.getHttpServer()).patch('/shop/5').send({ name: '' });
+    expect(res.status).toBe(400);
+    expect(service.updateOwned).not.toHaveBeenCalled();
+  });
+
+  it('PATCH with a whitespace-only name passes the pipe (IsNotEmpty only rejects \'\') and is left to the service', async () => {
+    service.updateOwned.mockResolvedValue({ affected: 1 });
+    const res = await request(app.getHttpServer()).patch('/shop/5').send({ name: '   ' });
+    expect(res.status).toBe(200);
+    expect(service.updateOwned).toHaveBeenCalledWith(5, 7, { name: '   ' });
   });
 });
