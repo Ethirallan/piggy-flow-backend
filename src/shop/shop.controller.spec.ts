@@ -7,7 +7,7 @@ import { ShopService } from './shop.service';
 describe('ShopController', () => {
   let app: INestApplication;
   let user: any;
-  const service = { updateOwned: jest.fn(), removeOwned: jest.fn() };
+  const service = { updateOwned: jest.fn(), removeOwned: jest.fn(), listForUser: jest.fn(), copy: jest.fn() };
 
   beforeEach(async () => {
     jest.resetAllMocks();
@@ -54,5 +54,32 @@ describe('ShopController', () => {
     const res = await request(app.getHttpServer()).delete('/shop/5');
     expect(res.status).toBe(409);
     expect(res.body.message).toBe('In use');
+  });
+
+  it('GET /shop lists all the user\'s shops, GET /shop?account=3 one account', async () => {
+    service.listForUser.mockResolvedValue([]);
+    expect((await request(app.getHttpServer()).get('/shop')).status).toBe(200);
+    expect(service.listForUser).toHaveBeenLastCalledWith(7, undefined);
+    expect((await request(app.getHttpServer()).get('/shop?account=3')).status).toBe(200);
+    expect(service.listForUser).toHaveBeenLastCalledWith(7, 3);
+  });
+
+  it('GET /shop?account=abc gives 400', async () => {
+    expect((await request(app.getHttpServer()).get('/shop?account=abc')).status).toBe(400);
+    expect(service.listForUser).not.toHaveBeenCalled();
+  });
+
+  it('GET /shop/getShopsByUser lists like GET /shop', async () => {
+    service.listForUser.mockResolvedValue([{ id: 1 }]);
+    const res = await request(app.getHttpServer()).get('/shop/getShopsByUser');
+    expect(res.status).toBe(200);
+    expect(service.listForUser).toHaveBeenCalledWith(7);
+  });
+
+  it('POST /shop/:id/copy passes the user and the body', async () => {
+    service.copy.mockResolvedValue({ id: 50 });
+    const res = await request(app.getHttpServer()).post('/shop/5/copy').send({ account: { id: 9 } });
+    expect(res.status).toBe(201);
+    expect(service.copy).toHaveBeenCalledWith(5, { id: 7 }, { account: { id: 9 } });
   });
 });

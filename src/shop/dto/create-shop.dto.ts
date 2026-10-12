@@ -1,4 +1,4 @@
-import { IsNotEmpty } from "class-validator";
+import { Allow, IsNotEmpty } from "class-validator";
 import { CreateUserDto } from "src/user/dto/create-user.dto";
 
 export class CreateShopDto {
@@ -7,6 +7,10 @@ export class CreateShopDto {
 
   @IsNotEmpty()
   name: string;
+
+  /** `{ id }` of an account the user belongs to; missing means their Personal account. Checked in the service. */
+  @Allow()
+  account?: { id: number } | null;
 
   constructor() {
 
