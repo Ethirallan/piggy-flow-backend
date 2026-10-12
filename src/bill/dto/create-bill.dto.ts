@@ -8,8 +8,8 @@ export class CreateBillDto {
   id: number;
   user: CreateUserDto;
 
-  @IsOptional()
-  account?: CreateAccountDto;
+  @IsNotEmpty()
+  account: CreateAccountDto;
 
   @IsDateString()
   date: Date;

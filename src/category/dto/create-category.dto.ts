@@ -1,12 +1,13 @@
 import { Transform } from "class-transformer";
-import { Allow, IsNotEmpty, IsString } from "class-validator";
+import { IsNotEmpty, IsString } from "class-validator";
 import { IsSingleEmoji } from "src/shared/is-singe-emoji-validator";
 import { CreateUserDto } from "src/user/dto/create-user.dto";
 
 export class CreateCategoryDto {
   id: number;
 
-  user: CreateUserDto;
+  /** The requester, set by the controller; not stored. */
+  user?: CreateUserDto;
 
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
@@ -16,9 +17,9 @@ export class CreateCategoryDto {
   @IsSingleEmoji()
   emoji: string;
 
-  /** `{ id }` of an account the user belongs to; missing means their Personal account. Checked in the service. */
-  @Allow()
-  account?: { id: number } | null;
+  /** `{ id }` of an account the user belongs to. Required; membership is checked in the service. */
+  @IsNotEmpty()
+  account: { id: number };
 
   constructor() {}
 }

@@ -6,7 +6,6 @@ import * as os from 'node:os';
 import * as nodePath from 'node:path';
 import { DataSource, In } from 'typeorm';
 import { AccountService } from '../account/account.service';
-import { PersonalAccountService } from '../account/personal-account.service';
 import { BillService } from './bill.service';
 import { Bill } from './entities/bill.entity';
 import { BillPhoto } from './entities/bill_photo.entity';
@@ -27,7 +26,6 @@ describe('BillService', () => {
   /** Shop and category rows by id, as R2 loads them (with their account). */
   let lists: Record<string, { id: number; account: { id: number } | null }>;
   let accounts: { assertMember: jest.Mock };
-  let personal: { ensurePersonal: jest.Mock };
 
   const bill = (over: any = {}) => ({
     id: 5,
@@ -59,7 +57,6 @@ describe('BillService', () => {
       },
     };
     accounts = { assertMember: jest.fn().mockResolvedValue({}) };
-    personal = { ensurePersonal: jest.fn().mockResolvedValue({ id: 3 }) };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         BillService,
@@ -67,7 +64,6 @@ describe('BillService', () => {
         { provide: getRepositoryToken(BillPhoto), useValue: photos },
         { provide: DataSource, useValue: dataSource },
         { provide: AccountService, useValue: accounts },
-        { provide: PersonalAccountService, useValue: personal },
       ],
     }).compile();
     service = module.get<BillService>(BillService);
@@ -76,16 +72,11 @@ describe('BillService', () => {
   describe('create', () => {
     beforeEach(() => ((bills as any).save = jest.fn().mockResolvedValue({ id: 1 })));
 
-    it.each([[null], [undefined]])('defaults account %j to the creator\'s Personal account', async (account) => {
-      await service.create({ user: { id: 7 }, account, price: 1 } as any);
-      expect(personal.ensurePersonal).toHaveBeenCalledWith(7);
-      expect((bills as any).save).toHaveBeenCalledWith(expect.objectContaining({ account: { id: 3 }, price: 1 }));
-    });
-
-    it('keeps a given account', async () => {
-      await service.create({ user: { id: 7 }, account: { id: 9 } } as any);
-      expect(personal.ensurePersonal).not.toHaveBeenCalled();
-      expect((bills as any).save).toHaveBeenCalledWith(expect.objectContaining({ account: { id: 9 } }));
+    it('saves the dto as given, with no Personal default', async () => {
+      const dto: any = { user: { id: 7 }, account: null, price: 1 };
+      await service.create(dto);
+      expect((bills as any).save).toHaveBeenCalledWith(dto);
+      expect(dto.account).toBeNull();
     });
 
     it('creates a new bill for a client id pointing at someone else\'s bill, leaving it unchanged', async () => {
@@ -220,13 +211,11 @@ describe('BillService', () => {
       await expect(service.assertNewBill(dto, 1)).rejects.toEqual(R2);
     });
 
-    it('checks against the Personal account when no account is given', async () => {
-      const dto: any = { user: { id: 1 }, account: null, shop: { id: 11 }, category: { id: 13 } };
-      await expect(service.assertNewBill(dto, 1)).rejects.toEqual(R2);
-      expect(personal.ensurePersonal).toHaveBeenCalledWith(1);
-      expect(dto.account).toEqual({ id: 3 });
-      lists['Shop:11'].account = { id: 3 };
-      await expect(service.assertNewBill({ ...dto, account: undefined }, 1)).resolves.toBeUndefined();
+    it.each([[null], [undefined]])('gives 400 Invalid account. without an account (%j), before R2', async (account) => {
+      const dto: any = { user: { id: 1 }, account, shop: { id: 11 }, category: { id: 12 } };
+      await expect(service.assertNewBill(dto, 1)).rejects.toEqual(new BadRequestException('Invalid account.'));
+      expect(accounts.assertMember).not.toHaveBeenCalled();
+      expect(dataSource.manager.findOne).not.toHaveBeenCalled();
     });
 
     it('gives 400 for a shop that does not exist or a malformed shop', async () => {
@@ -366,14 +355,6 @@ describe('BillService', () => {
       expect(deleteCalls().flatMap(([paths]) => paths)).not.toContain('n1.jpg');
     });
 
-    it('rejects an unknown photo id with 400 before creating a Personal account', async () => {
-      await expect(
-        service.updateWithPhotos(5, 1, { account: null, removePhotoIds: [99] } as any, []),
-      ).rejects.toBeInstanceOf(BadRequestException);
-      expect(personal.ensurePersonal).not.toHaveBeenCalled();
-      expect(dataSource.transaction).not.toHaveBeenCalled();
-    });
-
     it('rejects an unknown photo id with 400 and deletes the new files', async () => {
       await expect(
         service.updateWithPhotos(5, 1, { removePhotoIds: [2, 42] }, [file('n1.jpg')]),
@@ -407,26 +388,23 @@ describe('BillService', () => {
       },
     );
 
-    it('updates to a member target account, and skips the check for account null', async () => {
+    it('updates to a member target account', async () => {
       await service.updateWithPhotos(5, 1, { account: { id: 8 } } as any, []);
       expect(accounts.assertMember).toHaveBeenCalledWith(8, 1);
       expect(manager.update).toHaveBeenCalledWith(expect.anything(), 5, { account: { id: 8 } });
-      expect(personal.ensurePersonal).not.toHaveBeenCalled();
-      accounts.assertMember.mockClear();
-      await service.updateWithPhotos(5, 1, { account: null } as any, []);
-      expect(accounts.assertMember).not.toHaveBeenCalled();
     });
 
-    it('defaults an explicit null account to the bill creator\'s Personal account', async () => {
-      // Member 2 edits a bill created by user 1.
-      await service.updateWithPhotos(5, 2, { account: null } as any, []);
-      expect(personal.ensurePersonal).toHaveBeenCalledWith(1);
-      expect(manager.update).toHaveBeenCalledWith(expect.anything(), 5, { account: { id: 3 } });
+    it('gives 400 Invalid account. for an explicit null account, writes nothing and deletes the new files', async () => {
+      await expect(
+        service.updateWithPhotos(5, 2, { account: null } as any, [file('n1.jpg')]),
+      ).rejects.toEqual(new BadRequestException('Invalid account.'));
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(deleteCalls()[0][0]).toEqual(['n1.jpg']);
     });
 
     it('leaves the account alone when the dto has no account', async () => {
       await service.updateWithPhotos(5, 1, { price: 4 } as any, []);
-      expect(personal.ensurePersonal).not.toHaveBeenCalled();
+      expect(accounts.assertMember).not.toHaveBeenCalled();
       expect(manager.update).toHaveBeenCalledWith(expect.anything(), 5, { price: 4 });
     });
 
@@ -458,13 +436,6 @@ describe('BillService', () => {
           service.updateWithPhotos(5, 1, { shop: { id: 31 } } as any, []),
         ).rejects.toEqual(R2);
         expect(dataSource.transaction).not.toHaveBeenCalled();
-      });
-
-      it('checks a null account against the Personal account', async () => {
-        await expect(
-          service.updateWithPhotos(5, 1, { account: null } as any, []),
-        ).rejects.toEqual(R2);
-        expect(personal.ensurePersonal).toHaveBeenCalledWith(1);
       });
 
       it('passes a valid change of account, shop and category', async () => {

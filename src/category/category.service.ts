@@ -1,8 +1,7 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { AccountService } from 'src/account/account.service';
-import { PersonalAccountService } from 'src/account/personal-account.service';
-import { assertAccountRef } from 'src/shared/account-ref';
+import { assertRequiredAccountRef } from 'src/shared/account-ref';
 import { assertSomethingToUpdate, deleteOrInUse, hasNameClash, listInAccounts, loadAsMember } from 'src/shared/account-scoped';
 import { Repository } from 'typeorm';
 import { Bill } from 'src/bill/entities/bill.entity';
@@ -21,20 +20,17 @@ export class CategoryService {
     private billRepository: Repository<Bill>,
     @InjectRepository(Subscription)
     private subscriptionRepository: Repository<Subscription>,
-    private personalAccounts: PersonalAccountService,
     private accounts: AccountService,
   ) { }
 
   async create(createCategoryDto: CreateCategoryDto) {
     const userId = createCategoryDto.user?.id;
     if (userId == null) throw new NotFoundException();
-    await assertAccountRef(createCategoryDto.account, userId, this.accounts);
-    const account = createCategoryDto.account ?? (await this.personalAccounts.ensurePersonal(userId));
+    await assertRequiredAccountRef(createCategoryDto.account, userId, this.accounts);
     const saved = await this.categoryRepository.save({
       name: createCategoryDto.name,
       emoji: createCategoryDto.emoji,
-      user: createCategoryDto.user,
-      account,
+      account: createCategoryDto.account,
     });
     return this.categoryRepository.findOne({ where: { id: saved.id }, relations: ['account'] });
   }
@@ -62,12 +58,11 @@ export class CategoryService {
   /** Copies a category (name and emoji) into another account the user belongs to. */
   async copy(id: number, user: { id: number } | undefined, dto: { account?: unknown }) {
     const source = await loadAsMember(this.categoryRepository, id, user?.id, this.accounts);
-    if (dto?.account == null) throw new BadRequestException('Invalid account.');
-    await assertAccountRef(dto.account, user.id, this.accounts);
+    await assertRequiredAccountRef(dto?.account, user.id, this.accounts);
     const target = dto.account as { id: number };
     const existing = await this.categoryRepository.find({ where: { account: { id: target.id } } });
     if (hasNameClash(existing, source.name)) throw new ConflictException('Already exists');
-    const saved = await this.categoryRepository.save({ name: source.name, emoji: source.emoji, account: { id: target.id }, user });
+    const saved = await this.categoryRepository.save({ name: source.name, emoji: source.emoji, account: { id: target.id } });
     return this.categoryRepository.findOne({ where: { id: saved.id }, relations: ['account'] });
   }
 }

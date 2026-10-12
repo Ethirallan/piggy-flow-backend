@@ -46,8 +46,7 @@ export class SubscriptionController {
     if (secret === process.env.CRON_SECRET) {
       const day = new Date().getDate();
       const subscriptions = await this.subscriptionService.getSubscriptionsByDay(day);
-      // One at a time: parallel creates would race in ensurePersonal and
-      // could give a user several Personal accounts.
+      // One at a time, so the first failure stops the run with nothing left in flight.
       for (const subscription of subscriptions) {
         const newBill = new CreateBillDto();
         newBill.user = subscription.user;

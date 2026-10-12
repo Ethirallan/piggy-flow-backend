@@ -1,9 +1,10 @@
-import { INestApplication, NotFoundException } from '@nestjs/common';
+import { BadRequestException, INestApplication, NotFoundException, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
 import { SubscriptionController } from './subscription.controller';
 import { SubscriptionService } from './subscription.service';
 import { BillService } from '../bill/bill.service';
+import { CreateSubscriptionDto } from './dto/create-subscription.dto';
 
 describe('SubscriptionController', () => {
   let app: INestApplication;
@@ -87,12 +88,22 @@ describe('SubscriptionController', () => {
     expect(res.status).toBe(404);
   });
 
+  it('the create DTO requires an account: missing or null gives 400 in the pipe', async () => {
+    // Same options as main.ts.
+    const pipe = new ValidationPipe({ whitelist: true, transform: true });
+    const validate = (body: object) => pipe.transform(body, { type: 'body', metatype: CreateSubscriptionDto });
+    const body = { chargeDay: 1, price: 2, shop: { id: 1 }, category: { id: 1 } };
+    await expect(validate(body)).rejects.toBeInstanceOf(BadRequestException);
+    await expect(validate({ ...body, account: null })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(validate({ ...body, account: { id: 4 } })).resolves.toMatchObject({ account: { id: 4 } });
+  });
+
   describe('insertSubscriptions', () => {
     const OLD_SECRET = process.env.CRON_SECRET;
     beforeEach(() => (process.env.CRON_SECRET = 's3cret'));
     afterAll(() => (process.env.CRON_SECRET = OLD_SECRET));
 
-    const sub = (id: number) => ({ id, user: { id: 7 }, account: null, shop: { id: 1 }, category: { id: 2 }, price: 3, name: `s${id}` });
+    const sub = (id: number) => ({ id, user: { id: 7 }, account: { id: 5 }, shop: { id: 1 }, category: { id: 2 }, price: 3, name: `s${id}` });
 
     it('creates the bills one after another, never in parallel', async () => {
       service.getSubscriptionsByDay.mockResolvedValue([sub(1), sub(2)]);
@@ -106,7 +117,7 @@ describe('SubscriptionController', () => {
       const res = await request(app.getHttpServer()).get('/subscription/insertSubscriptions/s3cret');
       expect(res.status).toBe(200);
       expect(events).toEqual(['start s1', 'end s1', 'start s2', 'end s2']);
-      expect(bills.create).toHaveBeenCalledWith(expect.objectContaining({ user: { id: 7 }, account: null, comment: 's1' }));
+      expect(bills.create).toHaveBeenCalledWith(expect.objectContaining({ user: { id: 7 }, account: { id: 5 }, comment: 's1' }));
     });
 
     it('bills inherit the subscription\'s account, shop and category', async () => {

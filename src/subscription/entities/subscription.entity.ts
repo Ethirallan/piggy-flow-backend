@@ -13,7 +13,7 @@ export class Subscription {
   @ManyToOne(() => User, user => user.bills)
   user: User;
 
-  @ManyToOne(() => Account, account => account.bills, { nullable: true })
+  @ManyToOne(() => Account, account => account.bills, { nullable: false })
   account: Account;
 
   @Column()

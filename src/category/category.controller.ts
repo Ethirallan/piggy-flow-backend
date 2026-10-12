@@ -19,11 +19,6 @@ export class CategoryController {
     return this.categoryService.listForUser(req.user?.id, parseAccountQuery(account));
   }
 
-  @Get('getCategoriesByUser')
-  getCategoriesByUserId(@Req() req: any) {
-    return this.categoryService.listForUser(req.user?.id);
-  }
-
   @Post(':id/copy')
   copy(@Param('id', ParseIntPipe) id: number, @Req() req: any, @Body() body: { account?: unknown }) {
     return this.categoryService.copy(id, req.user, body);

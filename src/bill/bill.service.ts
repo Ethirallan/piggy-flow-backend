@@ -6,8 +6,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
 import { AccountService } from 'src/account/account.service';
-import { PersonalAccountService } from 'src/account/personal-account.service';
-import { assertAccountRef } from 'src/shared/account-ref';
+import { assertAccountRef, assertRequiredAccountRef } from 'src/shared/account-ref';
 import { pickFields } from 'src/shared/pick-fields';
 import { assertSameList } from 'src/shared/same-list';
 import { CreateBillPhotoDto } from './dto/create-bill-photo.dto';
@@ -42,40 +41,26 @@ export class BillService {
     private billPhotoRepository: Repository<BillPhoto>,
     private dataSource: DataSource,
     private accountService: AccountService,
-    private personalAccounts: PersonalAccountService,
   ) {}
 
-  /** A target account must be one the user belongs to; null means personal. */
-  async assertTargetAccount(account: unknown, userId: number | undefined) {
-    await assertAccountRef(account, userId, this.accountService);
-  }
-
   /**
-   * Checks a new bill before anything is saved: the account reference, the
-   * Personal default for a missing account, then R2 against that account.
-   * `ensurePersonal` may create the Personal account before an R2 400. That is
-   * intentional and harmless: the user would get it on their next request anyway.
+   * Checks a new bill before anything is saved: the account (required, and one
+   * the user belongs to), then R2 against that account.
    */
   async assertNewBill(dto: CreateBillDto, userId: number) {
-    await this.assertTargetAccount(dto.account, userId);
-    if (dto.account == null) dto.account = await this.personalAccounts.ensurePersonal(userId);
+    await assertRequiredAccountRef(dto.account, userId, this.accountService);
     await assertSameList(this.dataSource.manager, dto.account, dto.shop, dto.category);
   }
 
   /**
-   * No account (the current web app, or the subscription cron) means the
-   * creator's Personal account. Does not check R2: the cron copies a
-   * subscription, which was checked when it was saved.
+   * Saves a bill checked by `assertNewBill`, or one the subscription cron copies
+   * from a subscription (checked when it was saved).
    *
    * Only the client fields and the user are saved, never an id: a client id
    * would make `save` overwrite that bill instead of inserting a new one.
    */
   async create(createBillDto: CreateBillDto) {
-    const bill = { ...pickBillFields(createBillDto), user: createBillDto.user };
-    if (bill.account == null && bill.user?.id != null) {
-      bill.account = await this.personalAccounts.ensurePersonal(bill.user.id);
-    }
-    return this.billRepository.save(bill);
+    return this.billRepository.save({ ...pickBillFields(createBillDto), user: createBillDto.user });
   }
 
   async getBillById(id: number) {
@@ -154,7 +139,8 @@ export class BillService {
     let removedPaths: string[];
     try {
       const bill = await this.getOwnedBill(id, userId);
-      await this.assertTargetAccount(dto.account, userId);
+      // Missing means unchanged; null is a 400.
+      await assertAccountRef(dto.account, userId, this.accountService);
 
       const removeIds = [...new Set(dto.removePhotoIds ?? [])];
       const photos = bill.photos ?? [];
@@ -165,9 +151,6 @@ export class BillService {
         .filter((p) => removeIds.includes(p.id))
         .map((p) => p.path);
 
-      if (dto.account === null) {
-        dto.account = await this.personalAccounts.ensurePersonal(bill.user?.id ?? userId);
-      }
       if (dto.account !== undefined || dto.shop !== undefined || dto.category !== undefined) {
         await assertSameList(
           this.dataSource.manager,

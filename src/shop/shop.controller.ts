@@ -19,11 +19,6 @@ export class ShopController {
     return this.shopService.listForUser(req.user?.id, parseAccountQuery(account));
   }
 
-  @Get('getShopsByUser')
-  getShopsByUserId(@Req() req: any) {
-    return this.shopService.listForUser(req.user?.id);
-  }
-
   @Post(':id/copy')
   copy(@Param('id', ParseIntPipe) id: number, @Req() req: any, @Body() body: { account?: unknown }) {
     return this.shopService.copy(id, req.user, body);

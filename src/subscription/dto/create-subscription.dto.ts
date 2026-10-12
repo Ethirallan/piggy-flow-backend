@@ -8,8 +8,8 @@ export class CreateSubscriptionDto {
   id: number;
   user: CreateUserDto;
 
-  @IsOptional()
-  account?: CreateAccountDto;
+  @IsNotEmpty()
+  account: CreateAccountDto;
 
   @IsNumber()
   chargeDay: number;

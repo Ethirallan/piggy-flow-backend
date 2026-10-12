@@ -3,14 +3,12 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { AccountService } from '../account/account.service';
-import { PersonalAccountService } from '../account/personal-account.service';
 import { SubscriptionService } from './subscription.service';
 import { Subscription } from './entities/subscription.entity';
 
 describe('SubscriptionService', () => {
   let service: SubscriptionService;
   const accounts = { assertMember: jest.fn() };
-  const personal = { ensurePersonal: jest.fn() };
   const repo = { save: jest.fn(), findOne: jest.fn(), update: jest.fn(), delete: jest.fn(), find: jest.fn() };
   // Created by 7; 7 and 8 are members of its account 5.
   const creatorSub = { id: 4, user: { id: 7 }, account: { id: 5, users: [{ id: 7 }, { id: 8 }] } };
@@ -32,7 +30,6 @@ describe('SubscriptionService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [SubscriptionService, { provide: getRepositoryToken(Subscription), useValue: repo },
         { provide: AccountService, useValue: accounts },
-        { provide: PersonalAccountService, useValue: personal },
         { provide: DataSource, useValue: { manager } },
       ],
     }).compile();
@@ -81,16 +78,11 @@ describe('SubscriptionService', () => {
       expect(repo.save).not.toHaveBeenCalled();
     });
 
-    it('createOwned checks a missing account against the Personal account', async () => {
-      personal.ensurePersonal.mockResolvedValue({ id: 3 });
-      const dto: any = { user: { id: 7 }, account: null, shop: { id: 1 }, category: { id: 2 } };
-      await expect(service.createOwned(7, dto)).rejects.toEqual(R2);
+    it.each([[null], [undefined]])('createOwned gives 400 Invalid account. without an account (%j), before R2', async (account) => {
+      const dto: any = { user: { id: 7 }, account, shop: { id: 1 }, category: { id: 2 } };
+      await expect(service.createOwned(7, dto)).rejects.toEqual(new BadRequestException('Invalid account.'));
+      expect(manager.findOne).not.toHaveBeenCalled();
       expect(repo.save).not.toHaveBeenCalled();
-      lists['Shop:1'].account = { id: 3 };
-      lists['Category:2'].account = { id: 3 };
-      repo.save.mockResolvedValue({ id: 1 });
-      await service.createOwned(7, { ...dto, account: undefined });
-      expect(repo.save).toHaveBeenCalledWith(expect.objectContaining({ account: { id: 3 } }));
     });
 
     it('createOwned gives 400 for a shop that does not exist', async () => {
@@ -104,18 +96,6 @@ describe('SubscriptionService', () => {
       accounts.assertMember.mockResolvedValue({});
       await expect(service.updateOwned(4, 7, { account: { id: 8 } } as any)).rejects.toEqual(R2);
       expect(repo.update).not.toHaveBeenCalled();
-    });
-
-    it('updateOwned checks a null account against the creator\'s Personal account', async () => {
-      repo.findOne.mockResolvedValue({ ...creatorSub, shop: { id: 1 }, category: { id: 2 } });
-      personal.ensurePersonal.mockResolvedValue({ id: 3 });
-      await expect(service.updateOwned(4, 8, { account: null } as any)).rejects.toEqual(R2);
-      expect(personal.ensurePersonal).toHaveBeenCalledWith(7);
-      expect(repo.update).not.toHaveBeenCalled();
-      lists['Shop:1'].account = { id: 3 };
-      lists['Category:2'].account = { id: 3 };
-      await service.updateOwned(4, 8, { account: null } as any);
-      expect(repo.update).toHaveBeenCalledWith(4, { account: { id: 3 } });
     });
 
     it('updateOwned passes a valid change, and skips the check when no list field changes', async () => {
@@ -143,20 +123,19 @@ describe('SubscriptionService', () => {
     expect(repo.update).toHaveBeenCalledWith(4, { shop, price: 5 });
   });
 
-  it('updateOwned defaults an explicit null account to the creator\'s Personal account', async () => {
+  it('updateOwned gives 400 Invalid account. for an explicit null account and writes nothing', async () => {
     repo.findOne.mockResolvedValue(creatorSub);
-    repo.update.mockResolvedValue({ affected: 1 });
-    personal.ensurePersonal.mockResolvedValue({ id: 3 });
-    // A member (8) edits; the default is the creator's (7) Personal account.
-    await service.updateOwned(4, 8, { account: null, price: 2 } as any);
-    expect(personal.ensurePersonal).toHaveBeenCalledWith(7);
-    expect(repo.update).toHaveBeenCalledWith(4, { account: { id: 3 }, price: 2 });
+    await expect(service.updateOwned(4, 8, { account: null, price: 2 } as any)).rejects.toEqual(
+      new BadRequestException('Invalid account.'),
+    );
+    expect(accounts.assertMember).not.toHaveBeenCalled();
+    expect(repo.update).not.toHaveBeenCalled();
   });
 
   it('updateOwned leaves the account alone when the dto has no account', async () => {
     repo.findOne.mockResolvedValue(creatorSub);
     await service.updateOwned(4, 7, { price: 2 } as any);
-    expect(personal.ensurePersonal).not.toHaveBeenCalled();
+    expect(accounts.assertMember).not.toHaveBeenCalled();
     expect(repo.update).toHaveBeenCalledWith(4, { price: 2 });
   });
 
@@ -197,7 +176,6 @@ describe('SubscriptionService', () => {
     accounts.assertMember.mockResolvedValue({});
     await service.updateOwned(4, 7, { account: { id: 8 } } as any);
     expect(repo.update).toHaveBeenCalledWith(4, { account: { id: 8 } });
-    expect(personal.ensurePersonal).not.toHaveBeenCalled();
   });
 
   it('createOwned gives 404 for a non-member target account and saves nothing', async () => {
@@ -206,22 +184,12 @@ describe('SubscriptionService', () => {
     expect(repo.save).not.toHaveBeenCalled();
   });
 
-  it('createOwned saves for a member account, a null account and no account', async () => {
+  it('createOwned saves for a member account', async () => {
     accounts.assertMember.mockResolvedValue({});
     repo.save.mockResolvedValue({ id: 1 });
-    personal.ensurePersonal.mockResolvedValue({ id: 3 });
-    const user = { id: 7 };
-    await service.createOwned(7, { user, account: { id: 8 } } as any);
-    expect(personal.ensurePersonal).not.toHaveBeenCalled();
-    await service.createOwned(7, { user, account: null } as any);
-    await service.createOwned(7, { user } as any);
-    expect(accounts.assertMember).toHaveBeenCalledTimes(1);
-    expect(accounts.assertMember).toHaveBeenCalledWith(8, 7);
-    expect(personal.ensurePersonal).toHaveBeenCalledTimes(2);
-    expect(personal.ensurePersonal).toHaveBeenCalledWith(7);
-    expect(repo.save).toHaveBeenNthCalledWith(1, expect.objectContaining({ account: { id: 8 } }));
-    expect(repo.save).toHaveBeenNthCalledWith(2, expect.objectContaining({ account: { id: 3 } }));
-    expect(repo.save).toHaveBeenNthCalledWith(3, expect.objectContaining({ account: { id: 3 } }));
+    await service.createOwned(7, { user: { id: 7 }, account: { id: 5 }, shop: { id: 1 }, category: { id: 2 } } as any);
+    expect(accounts.assertMember).toHaveBeenCalledWith(5, 7);
+    expect(repo.save).toHaveBeenCalledWith(expect.objectContaining({ account: { id: 5 } }));
   });
 
   it('createOwned creates a new subscription for a client id pointing at someone else\'s, leaving it unchanged', async () => {
@@ -272,11 +240,4 @@ describe('SubscriptionService', () => {
     });
   });
 
-  it('updateOwned accepts account null', async () => {
-    repo.findOne.mockResolvedValue(creatorSub);
-    personal.ensurePersonal.mockResolvedValue({ id: 3 });
-    await service.updateOwned(4, 7, { account: null } as any);
-    expect(repo.update).toHaveBeenCalledWith(4, { account: { id: 3 } });
-    expect(accounts.assertMember).not.toHaveBeenCalled();
-  });
 });

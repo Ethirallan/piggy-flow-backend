@@ -71,11 +71,16 @@ describe('ShopController', () => {
     expect(service.listForUser).not.toHaveBeenCalled();
   });
 
-  it('GET /shop/getShopsByUser lists like GET /shop', async () => {
-    service.listForUser.mockResolvedValue([{ id: 1 }]);
+  it('GET /shop/getShopsByUser is gone (404)', async () => {
     const res = await request(app.getHttpServer()).get('/shop/getShopsByUser');
-    expect(res.status).toBe(200);
-    expect(service.listForUser).toHaveBeenCalledWith(7);
+    expect(res.status).toBe(404);
+    expect(service.listForUser).not.toHaveBeenCalled();
+  });
+
+  it.each([[{}], [{ account: null }], [{ account: '' }]])('POST without an account %j gives 400 before the service', async (body) => {
+    const res = await request(app.getHttpServer()).post('/shop').send({ name: 'Lidl', ...body });
+    expect(res.status).toBe(400);
+    expect(service.create).not.toHaveBeenCalled();
   });
 
   it('POST /shop/:id/copy passes the user and the body', async () => {
@@ -114,7 +119,7 @@ describe('ShopController', () => {
   it('POST and PATCH trim the name before the service', async () => {
     service.create.mockResolvedValue({ id: 1 });
     service.updateAsMember.mockResolvedValue({ affected: 1 });
-    expect((await request(app.getHttpServer()).post('/shop').send({ name: '  Lidl  ' })).status).toBe(201);
+    expect((await request(app.getHttpServer()).post('/shop').send({ name: '  Lidl  ', account: { id: 9 } })).status).toBe(201);
     expect(service.create).toHaveBeenCalledWith(expect.objectContaining({ name: 'Lidl' }));
     expect((await request(app.getHttpServer()).patch('/shop/5').send({ name: '  Lidl  ' })).status).toBe(200);
     expect(service.updateAsMember).toHaveBeenCalledWith(5, 7, { name: 'Lidl' });

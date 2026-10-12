@@ -14,7 +14,7 @@ export class Bill {
   @ManyToOne(() => User, user => user.bills, { onDelete: 'CASCADE' })
   user: User;
 
-  @ManyToOne(() => Account, account => account.bills, { nullable: true, onDelete: 'CASCADE' })
+  @ManyToOne(() => Account, account => account.bills, { nullable: false, onDelete: 'CASCADE' })
   account: Account;
 
   @Column()

@@ -1,6 +1,5 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { AccountService } from 'src/account/account.service';
-import { PersonalAccountService } from 'src/account/personal-account.service';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Bill } from 'src/bill/entities/bill.entity';
@@ -11,7 +10,6 @@ import { Shop } from './entities/shop.entity';
 describe('ShopService', () => {
   let service: ShopService;
   const repo = { find: jest.fn(), findOne: jest.fn(), update: jest.fn(), delete: jest.fn(), save: jest.fn() };
-  const personal = { ensurePersonal: jest.fn() };
   const accounts = { assertMember: jest.fn() };
   const bills = { count: jest.fn() };
   const subs = { count: jest.fn() };
@@ -25,7 +23,6 @@ describe('ShopService', () => {
         { provide: getRepositoryToken(Shop), useValue: repo },
         { provide: getRepositoryToken(Bill), useValue: bills },
         { provide: getRepositoryToken(Subscription), useValue: subs },
-        { provide: PersonalAccountService, useValue: personal },
         { provide: AccountService, useValue: accounts },
       ],
     }).compile();
@@ -40,25 +37,19 @@ describe('ShopService', () => {
   const shopIn = (accountId = 3) => repo.findOne.mockResolvedValue({ id: 5, name: 'Lidl', account: { id: accountId } });
 
   describe('create', () => {
-    it.each([[undefined], [null]])('saves into the creator\'s Personal account (body account %j)', async (account) => {
-      personal.ensurePersonal.mockResolvedValue({ id: 3 });
-      repo.save.mockResolvedValue({ id: 1 });
-      repo.findOne.mockResolvedValue({ id: 1, account: { id: 3, name: 'Personal', personal: true } });
-      await expect(service.create({ name: 'x', user: { id: 7 }, account } as any)).resolves.toEqual({
-        id: 1,
-        account: { id: 3, name: 'Personal', personal: true },
+    it.each([[undefined], [null]])('gives 400 Invalid account. without an account (%j) and saves nothing', async (account) => {
+      await expect(service.create({ name: 'x', user: { id: 7 }, account } as any)).rejects.toMatchObject({
+        status: 400,
+        message: 'Invalid account.',
       });
-      expect(repo.findOne).toHaveBeenCalledWith({ where: { id: 1 }, relations: ['account'] });
-      expect(personal.ensurePersonal).toHaveBeenCalledWith(7);
-      expect(repo.save).toHaveBeenCalledWith({ name: 'x', user: { id: 7 }, account: { id: 3 } });
+      expect(repo.save).not.toHaveBeenCalled();
     });
 
     it('saves into a given account the user belongs to', async () => {
       repo.save.mockResolvedValue({ id: 1 });
       await service.create({ name: 'x', user: { id: 7 }, account: { id: 9 } } as any);
       expect(accounts.assertMember).toHaveBeenCalledWith(9, 7);
-      expect(personal.ensurePersonal).not.toHaveBeenCalled();
-      expect(repo.save).toHaveBeenCalledWith({ name: 'x', user: { id: 7 }, account: { id: 9 } });
+      expect(repo.save).toHaveBeenCalledWith({ name: 'x', account: { id: 9 } });
     });
 
     it('gives 404 for a foreign account and saves nothing', async () => {
@@ -74,7 +65,6 @@ describe('ShopService', () => {
 
     it('gives 404 without a user and saves nothing', async () => {
       await expect(service.create({ name: 'x', user: null } as any)).rejects.toBeInstanceOf(NotFoundException);
-      expect(personal.ensurePersonal).not.toHaveBeenCalled();
       expect(repo.save).not.toHaveBeenCalled();
     });
   });
@@ -206,7 +196,7 @@ describe('ShopService', () => {
       expect(accounts.assertMember).toHaveBeenCalledWith(3, 7);
       expect(accounts.assertMember).toHaveBeenCalledWith(9, 7);
       expect(repo.find).toHaveBeenCalledWith({ where: { account: { id: 9 } } });
-      expect(repo.save).toHaveBeenCalledWith({ name: 'Lidl', account: { id: 9 }, user });
+      expect(repo.save).toHaveBeenCalledWith({ name: 'Lidl', account: { id: 9 } });
     });
 
     it('gives 404 when the user is not a member of the target', async () => {

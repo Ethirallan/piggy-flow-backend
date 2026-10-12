@@ -4,8 +4,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { AccountService } from 'src/account/account.service';
-import { PersonalAccountService } from 'src/account/personal-account.service';
-import { assertAccountRef } from 'src/shared/account-ref';
+import { assertAccountRef, assertRequiredAccountRef } from 'src/shared/account-ref';
 import { pickFields } from 'src/shared/pick-fields';
 import { assertSameList } from 'src/shared/same-list';
 import { Subscription } from './entities/subscription.entity';
@@ -19,32 +18,23 @@ export class SubscriptionService {
     @InjectRepository(Subscription)
     private subscriptionRepository: Repository<Subscription>,
     private accountService: AccountService,
-    private personalAccounts: PersonalAccountService,
     private dataSource: DataSource,
   ) { }
 
   /**
-   * Creates a subscription. A target account must be one the user belongs to;
-   * no account (the current web app) means the creator's Personal account.
-   * The shop and category must be from that account (R2). Only the client
-   * fields and the user are saved, never an id: a client id would make `save`
-   * overwrite that subscription instead of inserting a new one.
+   * Creates a subscription. The account is required and must be one the user
+   * belongs to. The shop and category must be from that account (R2). Only the
+   * client fields and the user are saved, never an id: a client id would make
+   * `save` overwrite that subscription instead of inserting a new one.
    */
   async createOwned(userId: number | undefined, dto: CreateSubscriptionDto) {
     const subscription = {
       ...pickFields<CreateSubscriptionDto, (typeof CLIENT_FIELDS)[number]>(dto, CLIENT_FIELDS),
       user: dto.user,
     };
-    await this.assertTargetAccount(subscription.account, userId);
-    if (subscription.account == null && subscription.user?.id != null) {
-      subscription.account = await this.personalAccounts.ensurePersonal(subscription.user.id);
-    }
+    await assertRequiredAccountRef(subscription.account, userId, this.accountService);
     await assertSameList(this.dataSource.manager, subscription.account, subscription.shop, subscription.category);
     return this.subscriptionRepository.save(subscription);
-  }
-
-  private async assertTargetAccount(account: unknown, userId: number | undefined) {
-    await assertAccountRef(account, userId, this.accountService);
   }
 
   async getSubscriptionById(id: number) {
@@ -88,10 +78,8 @@ export class SubscriptionService {
       if (key in dto && (dto as any)[key] !== undefined) (changes as any)[key] = (dto as any)[key];
     }
     if (Object.keys(changes).length === 0) return;
-    await this.assertTargetAccount(changes.account, userId);
-    if (changes.account === null) {
-      changes.account = await this.personalAccounts.ensurePersonal(subscription.user?.id ?? userId);
-    }
+    // Missing means unchanged; null is a 400.
+    await assertAccountRef(changes.account, userId, this.accountService);
     if ('account' in changes || 'shop' in changes || 'category' in changes) {
       await assertSameList(
         this.dataSource.manager,
