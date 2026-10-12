@@ -106,6 +106,18 @@ describe('SubscriptionService', () => {
       expect(repo.update).not.toHaveBeenCalled();
     });
 
+    it('updateOwned checks a null account against the creator\'s Personal account', async () => {
+      repo.findOne.mockResolvedValue({ ...creatorSub, shop: { id: 1 }, category: { id: 2 } });
+      personal.ensurePersonal.mockResolvedValue({ id: 3 });
+      await expect(service.updateOwned(4, 8, { account: null } as any)).rejects.toEqual(R2);
+      expect(personal.ensurePersonal).toHaveBeenCalledWith(7);
+      expect(repo.update).not.toHaveBeenCalled();
+      lists['Shop:1'].account = { id: 3 };
+      lists['Category:2'].account = { id: 3 };
+      await service.updateOwned(4, 8, { account: null } as any);
+      expect(repo.update).toHaveBeenCalledWith(4, { account: { id: 3 } });
+    });
+
     it('updateOwned passes a valid change, and skips the check when no list field changes', async () => {
       repo.findOne.mockResolvedValue({ ...creatorSub, shop: { id: 1 }, category: { id: 2 } });
       accounts.assertMember.mockResolvedValue({});

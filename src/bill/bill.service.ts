@@ -46,6 +46,8 @@ export class BillService {
   /**
    * Checks a new bill before anything is saved: the account reference, the
    * Personal default for a missing account, then R2 against that account.
+   * `ensurePersonal` may create the Personal account before an R2 400. That is
+   * intentional and harmless: the user would get it on their next request anyway.
    */
   async assertNewBill(dto: CreateBillDto, userId: number) {
     await this.assertTargetAccount(dto.account, userId);
