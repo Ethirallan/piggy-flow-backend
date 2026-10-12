@@ -143,6 +143,10 @@ async function load(store: AccountsStore): Promise<Rows> {
 
 /** Reads the data and returns the actions, in apply order. Writes nothing. */
 export async function planMigration(store: AccountsStore): Promise<Action[]> {
+  return (await plan(store)).actions;
+}
+
+async function plan(store: AccountsStore) {
   const rows = await load(store);
   const actions: Action[] = [];
   const personalOf = new Map<number, number>();
@@ -215,7 +219,126 @@ export async function planMigration(store: AccountsStore): Promise<Action[]> {
     }
   }
 
-  return actions;
+  // 3. Each shop and category goes where its bills and subscriptions are.
+  //    A row that receives repoints from another row stays where it is
+  //    (pinned); planning repeats until the pinned set stops growing.
+  const personal = new Set(personalOf.values());
+  for (const table of LIST_TABLES) {
+    let pinned = new Set<number>();
+    for (;;) {
+      const res = planLists(table, rows, personalOf, personal, pinned);
+      if ([...res.pins].every((id) => pinned.has(id))) {
+        actions.push(...res.actions);
+        break;
+      }
+      pinned = new Set([...pinned, ...res.pins]);
+    }
+  }
+
+  return { actions, rows };
+}
+
+const sameList = (a: ListRow, b: ListRow) =>
+  a.userId === b.userId &&
+  a.name.trim().toLowerCase() === b.name.trim().toLowerCase() &&
+  (a.emoji ?? null) === (b.emoji ?? null);
+
+function planLists(
+  table: Table,
+  rows: Rows,
+  personalOf: Map<number, number>,
+  personal: Set<number>,
+  pinned: Set<number>,
+) {
+  const field = table === 'shop' ? 'shopId' : 'categoryId';
+  const usedBy = new Map<
+    number,
+    { table: RefTable; id: number; accountId: number }[]
+  >();
+  for (const rt of REF_TABLES) {
+    for (const r of rows[rt]) {
+      if (r[field] == null || r.accountId == null) continue;
+      const refs = usedBy.get(r[field]) ?? [];
+      refs.push({ table: rt, id: r.id, accountId: r.accountId });
+      usedBy.set(r[field], refs);
+    }
+  }
+
+  const actions: Action[] = [];
+  const pins = new Set<number>();
+  for (const row of rows[table]) {
+    const refs = usedBy.get(row.id) ?? [];
+    const accounts = new Set(refs.map((r) => r.accountId));
+    if (pinned.has(row.id)) accounts.add(row.accountId);
+    if (accounts.size === 0) {
+      const to = personalOf.get(row.userId);
+      if (to === undefined) {
+        const reason =
+          row.userId == null
+            ? 'no creator and no references'
+            : `creator ${row.userId} is not a user`;
+        actions.push({ kind: 'skip', table, id: row.id, reason });
+      } else if (row.accountId !== to) {
+        actions.push({
+          kind: 'list-account',
+          table,
+          id: row.id,
+          from: row.accountId,
+          to,
+        });
+      }
+      continue;
+    }
+    // Most bills (subscriptions don't count), then Personal, then lowest id.
+    const bills = (acc: number) =>
+      refs.filter((r) => r.table === 'bill' && r.accountId === acc).length;
+    const isPersonal = (acc: number) => (personal.has(acc) ? 1 : 0);
+    const winner = pinned.has(row.id)
+      ? row.accountId
+      : [...accounts].sort(
+          (a, b) =>
+            bills(b) - bills(a) || isPersonal(b) - isPersonal(a) || a - b,
+        )[0];
+    if (row.accountId !== winner) {
+      actions.push({
+        kind: 'list-account',
+        table,
+        id: row.id,
+        from: row.accountId,
+        to: winner,
+      });
+    }
+    for (const acc of accounts) {
+      if (acc === winner) continue;
+      const moving = refs
+        .filter((r) => r.accountId === acc)
+        .map((r) => ({ table: r.table, id: r.id }));
+      const existing = rows[table].find(
+        (c) => c.id !== row.id && c.accountId === acc && sameList(c, row),
+      );
+      if (!existing) {
+        actions.push({
+          kind: 'copy',
+          table,
+          sourceId: row.id,
+          to: acc,
+          refs: moving,
+        });
+        continue;
+      }
+      pins.add(existing.id);
+      for (const r of moving) {
+        actions.push({
+          kind: 'repoint',
+          ...r,
+          field,
+          from: row.id,
+          to: existing.id,
+        });
+      }
+    }
+  }
+  return { actions, pins };
 }
 
 /** Bill count and price sum per user, the sum rounded to cents. */
@@ -242,7 +365,7 @@ export async function runMigration(
   store: AccountsStore,
   logFile: string,
 ): Promise<{ applied: number; skipped: Action[] }> {
-  const plan = await planMigration(store);
+  const { actions, rows } = await plan(store);
   const isNew = await stat(logFile).then(
     (s) => s.size === 0,
     () => true,
@@ -278,9 +401,9 @@ export async function runMigration(
 
   try {
     if (totals) await write({ kind: 'totals', perUser: totals });
-    for (const planned of plan) {
+    for (const planned of actions) {
       const a =
-        'to' in planned && planned.to < 0
+        'to' in planned && planned.kind !== 'repoint' && planned.to < 0
           ? { ...planned, to: created.get(planned.to) }
           : planned;
       if ('to' in a && a.to === undefined) {
@@ -309,6 +432,39 @@ export async function runMigration(
         }
         case 'ref-account':
           await apply(a, await store.setRefAccount(a.table, a.id, null, a.to));
+          break;
+        case 'list-account':
+          await apply(
+            a,
+            await store.setListAccount(a.table, a.id, a.from, a.to),
+          );
+          break;
+        case 'copy': {
+          const source = rows[a.table].find((r) => r.id === a.sourceId);
+          const newId = await store.insertListCopy(a.table, source, a.to);
+          await apply(a, true, { ...a, newId });
+          // One log line per repoint, so a rollback can restore each one.
+          const field = a.table === 'shop' ? 'shopId' : 'categoryId';
+          for (const r of a.refs) {
+            const ok = await store.repoint(
+              r.table,
+              r.id,
+              field,
+              a.sourceId,
+              newId,
+            );
+            await apply(
+              { kind: 'repoint', ...r, field, from: a.sourceId, to: newId },
+              ok,
+            );
+          }
+          break;
+        }
+        case 'repoint':
+          await apply(
+            a,
+            await store.repoint(a.table, a.id, a.field, a.from, a.to),
+          );
           break;
         case 'skip':
           await skip(a, a.reason);

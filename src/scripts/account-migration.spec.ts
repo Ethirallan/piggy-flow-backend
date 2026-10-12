@@ -346,3 +346,244 @@ describe('account migration: Personal accounts and references', () => {
     });
   });
 });
+
+describe('account migration: shops and categories', () => {
+  const P = 1; // user 1's Personal
+  const H = 2; // Household: users 1 and 2
+  const accounts = (): Acc[] => [
+    { id: P, name: 'Personal', personal: true, members: [1] },
+    { id: H, name: 'Household', personal: false, members: [1, 2] },
+    { id: 3, name: 'Personal', personal: true, members: [2] },
+  ];
+  const lidl = (accountId: number | null = null): ListRow => ({
+    id: 1,
+    userId: 1,
+    accountId,
+    name: 'Lidl',
+    emoji: '🛒',
+  });
+  const sub = (
+    id: number,
+    accountId: number,
+    shopId: number,
+    categoryId: number | null = null,
+  ): RefRow => ({
+    id,
+    userId: 1,
+    accountId,
+    shopId,
+    categoryId,
+  });
+
+  it('keeps a shop used only in Personal there', async () => {
+    const store = new MemStore({
+      users: [{ id: 1 }],
+      accounts: accounts(),
+      bill: [bill(1, 1, P, 1), bill(2, 1, null, 1)],
+      shop: [lidl()],
+    });
+    await runMigration(store, logFile);
+    expect(store.data.shop).toEqual([lidl(P)]);
+    expect(store.data.bill.map((b) => [b.accountId, b.shopId])).toEqual([
+      [P, 1],
+      [P, 1],
+    ]);
+  });
+
+  it("moves an unused shop to its creator's Personal, created in the same run", async () => {
+    const store = new MemStore({ users: [{ id: 1 }], shop: [lidl()] });
+    expect(await planMigration(store)).toEqual([
+      { kind: 'personal', userId: 1 },
+      { kind: 'list-account', table: 'shop', id: 1, from: null, to: -1 },
+    ]);
+    await runMigration(store, logFile);
+    expect(store.data.shop[0].accountId).toBe(store.personalOf(1)[0].id);
+  });
+
+  it('keeps a shop in Personal (3 bills) and copies it for its Household bill', async () => {
+    const store = new MemStore({
+      users: [{ id: 1 }, { id: 2 }],
+      accounts: accounts(),
+      bill: [
+        bill(1, 1, P, 1),
+        bill(2, 1, P, 1),
+        bill(3, 1, P, 1),
+        bill(4, 2, H, 1),
+      ],
+      shop: [lidl()],
+    });
+    const res = await runMigration(store, logFile);
+    expect(store.data.shop).toEqual([lidl(P), { ...lidl(H), id: 2 }]);
+    expect(store.data.bill.map((b) => b.shopId)).toEqual([1, 1, 1, 2]);
+    expect(res).toEqual({ applied: 3, skipped: [] });
+    expect((await readLog()).slice(1)).toEqual([
+      { kind: 'list-account', table: 'shop', id: 1, from: null, to: P },
+      {
+        kind: 'copy',
+        table: 'shop',
+        sourceId: 1,
+        to: H,
+        refs: [{ table: 'bill', id: 4 }],
+        newId: 2,
+      },
+      {
+        kind: 'repoint',
+        table: 'bill',
+        id: 4,
+        field: 'shopId',
+        from: 1,
+        to: 2,
+      },
+    ]);
+    expect(await runMigration(store, logFile)).toEqual({
+      applied: 0,
+      skipped: [],
+    });
+  });
+
+  it('splits a shop and a category used only by a subscription in another account', async () => {
+    const store = new MemStore({
+      users: [{ id: 1 }, { id: 2 }],
+      accounts: accounts(),
+      bill: [bill(1, 1, P, 1)],
+      subscription: [sub(1, H, 1, 1)],
+      shop: [lidl()],
+      category: [
+        { id: 1, userId: 1, accountId: null, name: 'Food', emoji: null },
+      ],
+    });
+    await runMigration(store, logFile);
+    expect(store.data.shop.map((s) => [s.id, s.accountId])).toEqual([
+      [1, P],
+      [2, H],
+    ]);
+    // The category has only the Household subscription, so it moves there whole.
+    expect(store.data.category.map((c) => [c.id, c.accountId])).toEqual([
+      [1, H],
+    ]);
+    expect(store.data.subscription[0]).toMatchObject({
+      shopId: 2,
+      categoryId: 1,
+    });
+    expect(store.data.bill[0]).toMatchObject({ shopId: 1 });
+  });
+
+  it('prefers Personal on a tie, then the lowest account id', async () => {
+    const store = new MemStore({
+      users: [{ id: 1 }, { id: 2 }],
+      accounts: [
+        { id: 1, name: 'Household', personal: false, members: [1, 2] },
+        { id: 2, name: 'Work', personal: false, members: [1] },
+        { id: 3, name: 'Personal', personal: true, members: [1] },
+        { id: 4, name: 'Personal', personal: true, members: [2] },
+      ],
+      bill: [
+        bill(1, 1, 1, 1),
+        bill(2, 1, 3, 1),
+        bill(3, 1, 1, 2),
+        bill(4, 1, 2, 2),
+      ],
+      shop: [lidl(), { ...lidl(), id: 2, name: 'Spar' }],
+    });
+    await runMigration(store, logFile);
+    expect(store.data.shop.map((s) => [s.id, s.accountId])).toEqual([
+      [1, 3],
+      [2, 1],
+      [3, 1],
+      [4, 2],
+    ]);
+  });
+
+  it('reuses the copy after a run stopped before its references were repointed', async () => {
+    const store = new MemStore({
+      users: [{ id: 1 }, { id: 2 }],
+      accounts: accounts(),
+      bill: [
+        bill(1, 1, P, 1),
+        bill(2, 1, P, 1),
+        bill(3, 2, H, 1),
+        bill(4, 2, H, 1),
+      ],
+      subscription: [sub(1, H, 1)],
+      shop: [lidl(P)],
+    });
+    let repoints = 0;
+    store.onWrite = (method) =>
+      method === 'repoint' && ++repoints === 2 ? 'throw' : undefined;
+    await expect(runMigration(store, logFile)).rejects.toThrow(
+      'repoint failed',
+    );
+    expect(store.data.shop).toHaveLength(2);
+
+    store.onWrite = undefined;
+    expect(await planMigration(store)).toEqual([
+      {
+        kind: 'repoint',
+        table: 'bill',
+        id: 4,
+        field: 'shopId',
+        from: 1,
+        to: 2,
+      },
+      {
+        kind: 'repoint',
+        table: 'subscription',
+        id: 1,
+        field: 'shopId',
+        from: 1,
+        to: 2,
+      },
+    ]);
+    await runMigration(store, logFile);
+    expect(store.data.shop).toEqual([lidl(P), { ...lidl(H), id: 2 }]);
+    expect(store.data.bill.map((b) => b.shopId)).toEqual([1, 1, 2, 2]);
+    expect(store.data.subscription[0].shopId).toBe(2);
+    expect(await runMigration(store, logFile)).toEqual({
+      applied: 0,
+      skipped: [],
+    });
+  });
+
+  it('reuses a copy that has no references left, without moving it to Personal', async () => {
+    const store = new MemStore({
+      users: [{ id: 1 }],
+      accounts: accounts(),
+      bill: [bill(1, 1, P, 1), bill(2, 1, H, 1)],
+      shop: [lidl(P), { ...lidl(H), id: 2, name: ' lidl ' }],
+    });
+    expect(await planMigration(store)).toEqual([
+      {
+        kind: 'repoint',
+        table: 'bill',
+        id: 2,
+        field: 'shopId',
+        from: 1,
+        to: 2,
+      },
+    ]);
+  });
+
+  it('leaves an unreferenced shop without a creator unchanged and reports it', async () => {
+    const orphan: ListRow = {
+      id: 1,
+      userId: null,
+      accountId: null,
+      name: 'Old',
+    };
+    const store = new MemStore({
+      users: [{ id: 1 }],
+      accounts: accounts(),
+      shop: [orphan],
+    });
+    const res = await runMigration(store, logFile);
+    expect(res.skipped).toEqual([
+      {
+        kind: 'skip',
+        table: 'shop',
+        id: 1,
+        reason: 'no creator and no references',
+      },
+    ]);
+    expect(store.data.shop).toEqual([orphan]);
+  });
+});
