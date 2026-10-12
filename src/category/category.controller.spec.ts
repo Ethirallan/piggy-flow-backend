@@ -75,6 +75,7 @@ describe('CategoryController', () => {
     service.listForUser.mockResolvedValue([{ id: 1 }]);
     const res = await request(app.getHttpServer()).get('/category/getCategoriesByUser');
     expect(res.status).toBe(200);
+    expect(res.body).toEqual([{ id: 1 }]);
     expect(service.listForUser).toHaveBeenCalledWith(7);
   });
 
@@ -99,10 +100,30 @@ describe('CategoryController', () => {
     expect(service.updateAsMember).not.toHaveBeenCalled();
   });
 
-  it('PATCH with a whitespace-only name passes the pipe (IsNotEmpty only rejects \'\') and is left to the service', async () => {
+  it.each([['   '], ['\t ']])('PATCH with a blank name %j gives 400 before the service', async (name) => {
+    const res = await request(app.getHttpServer()).patch('/category/5').send({ name });
+    expect(res.status).toBe(400);
+    expect(service.updateAsMember).not.toHaveBeenCalled();
+  });
+
+  it.each([[''], ['   ']])('POST with a blank name %j gives 400 before the service', async (name) => {
+    const res = await request(app.getHttpServer()).post('/category').send({ name, emoji: '🍕' });
+    expect(res.status).toBe(400);
+    expect(service.create).not.toHaveBeenCalled();
+  });
+
+  it('PATCH with a blank name plus an emoji gives 400', async () => {
+    const res = await request(app.getHttpServer()).patch('/category/5').send({ name: '   ', emoji: '🍔' });
+    expect(res.status).toBe(400);
+    expect(service.updateAsMember).not.toHaveBeenCalled();
+  });
+
+  it('POST and PATCH trim the name before the service', async () => {
+    service.create.mockResolvedValue({ id: 1 });
     service.updateAsMember.mockResolvedValue({ affected: 1 });
-    const res = await request(app.getHttpServer()).patch('/category/5').send({ name: '   ' });
-    expect(res.status).toBe(200);
-    expect(service.updateAsMember).toHaveBeenCalledWith(5, 7, { name: '   ' });
+    expect((await request(app.getHttpServer()).post('/category').send({ name: '  Lidl  ', emoji: '🍕' })).status).toBe(201);
+    expect(service.create).toHaveBeenCalledWith(expect.objectContaining({ name: 'Lidl' }));
+    expect((await request(app.getHttpServer()).patch('/category/5').send({ name: '  Lidl  ' })).status).toBe(200);
+    expect(service.updateAsMember).toHaveBeenCalledWith(5, 7, { name: 'Lidl' });
   });
 });

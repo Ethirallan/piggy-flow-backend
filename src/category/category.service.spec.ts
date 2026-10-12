@@ -56,7 +56,12 @@ describe('CategoryService', () => {
 
     it('saves into a given account the user belongs to', async () => {
       repo.save.mockResolvedValue({ id: 1 });
-      await service.create({ name: 'x', emoji: '🍕', user: { id: 7 }, account: { id: 9 } } as any);
+      repo.findOne.mockResolvedValue({ id: 1, account: { id: 9 } });
+      await expect(service.create({ name: 'x', emoji: '🍕', user: { id: 7 }, account: { id: 9 } } as any)).resolves.toEqual({
+        id: 1,
+        account: { id: 9 },
+      });
+      expect(repo.findOne).toHaveBeenCalledWith({ where: { id: 1 }, relations: ['account'] });
       expect(accounts.assertMember).toHaveBeenCalledWith(9, 7);
       expect(personal.ensurePersonal).not.toHaveBeenCalled();
       expect(repo.save).toHaveBeenCalledWith({ name: 'x', emoji: '🍕', user: { id: 7 }, account: { id: 9 } });
@@ -134,7 +139,7 @@ describe('CategoryService', () => {
       expect(repo.findOne).not.toHaveBeenCalled();
     });
 
-    it.each([[{}], [{ name: undefined }], [{ name: '   ', emoji: '  ' }]])('gives 400 Nothing to update for %j', async (dto) => {
+    it.each([[{}], [{ name: undefined }], [{ emoji: null }]])('gives 400 Nothing to update for %j', async (dto) => {
       categoryIn();
       await expect(service.updateAsMember(5, 7, dto as any)).rejects.toMatchObject({
         status: 400,

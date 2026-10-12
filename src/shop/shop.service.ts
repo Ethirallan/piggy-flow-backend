@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { InjectRepository } from '@nestjs/typeorm';
 import { AccountService } from 'src/account/account.service';
 import { assertAccountRef } from 'src/shared/account-ref';
-import { assertSomethingToUpdate, deleteOrInUse, hasNameClash, loadAsMember } from 'src/shared/account-scoped';
+import { assertSomethingToUpdate, deleteOrInUse, hasNameClash, listInAccounts, loadAsMember } from 'src/shared/account-scoped';
 import { PersonalAccountService } from 'src/account/personal-account.service';
 import { Repository } from 'typeorm';
 import { Bill } from 'src/bill/entities/bill.entity';
@@ -36,12 +36,7 @@ export class ShopService {
 
   /** The shops of one account the user belongs to, or of all their accounts. */
   async listForUser(userId: number | undefined, accountId?: number) {
-    if (accountId !== undefined) {
-      await this.accounts.assertMember(accountId, userId);
-      return this.shopRepository.find({ where: { account: { id: accountId } }, relations: ['account'] });
-    }
-    if (userId == null) throw new NotFoundException();
-    return this.shopRepository.find({ where: { account: { users: { id: userId } } }, relations: ['account'] });
+    return listInAccounts(this.shopRepository, this.accounts, userId, accountId);
   }
 
   async updateAsMember(id: number, userId: number | undefined, dto: UpdateShopDto) {

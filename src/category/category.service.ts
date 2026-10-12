@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { AccountService } from 'src/account/account.service';
 import { PersonalAccountService } from 'src/account/personal-account.service';
 import { assertAccountRef } from 'src/shared/account-ref';
-import { assertSomethingToUpdate, deleteOrInUse, hasNameClash, loadAsMember } from 'src/shared/account-scoped';
+import { assertSomethingToUpdate, deleteOrInUse, hasNameClash, listInAccounts, loadAsMember } from 'src/shared/account-scoped';
 import { Repository } from 'typeorm';
 import { Bill } from 'src/bill/entities/bill.entity';
 import { Subscription } from 'src/subscription/entities/subscription.entity';
@@ -41,12 +41,7 @@ export class CategoryService {
 
   /** The categories of one account the user belongs to, or of all their accounts. */
   async listForUser(userId: number | undefined, accountId?: number) {
-    if (accountId !== undefined) {
-      await this.accounts.assertMember(accountId, userId);
-      return this.categoryRepository.find({ where: { account: { id: accountId } }, relations: ['account'] });
-    }
-    if (userId == null) throw new NotFoundException();
-    return this.categoryRepository.find({ where: { account: { users: { id: userId } } }, relations: ['account'] });
+    return listInAccounts(this.categoryRepository, this.accounts, userId, accountId);
   }
 
   async updateAsMember(id: number, userId: number | undefined, dto: UpdateCategoryDto) {

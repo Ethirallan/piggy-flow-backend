@@ -43,3 +43,18 @@ export async function deleteOrInUse<R>(remove: () => Promise<R>): Promise<R> {
     throw e;
   }
 }
+
+/** The rows of one account the user belongs to, or of all their accounts, each with its account. */
+export async function listInAccounts<T extends { account?: unknown }>(
+  repo: Pick<Repository<T>, 'find'>,
+  accounts: Pick<AccountService, 'assertMember'>,
+  userId: number | undefined,
+  accountId?: number,
+): Promise<T[]> {
+  if (accountId !== undefined) {
+    await accounts.assertMember(accountId, userId);
+    return repo.find({ where: { account: { id: accountId } } as any, relations: ['account'] });
+  }
+  if (userId == null) throw new NotFoundException();
+  return repo.find({ where: { account: { users: { id: userId } } } as any, relations: ['account'] });
+}

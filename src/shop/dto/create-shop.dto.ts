@@ -1,10 +1,13 @@
-import { Allow, IsNotEmpty } from "class-validator";
+import { Transform } from "class-transformer";
+import { Allow, IsNotEmpty, IsString } from "class-validator";
 import { CreateUserDto } from "src/user/dto/create-user.dto";
 
 export class CreateShopDto {
   id: number;
   user: CreateUserDto;
 
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
   @IsNotEmpty()
   name: string;
 

@@ -1,4 +1,5 @@
-import { Allow, IsNotEmpty } from "class-validator";
+import { Transform } from "class-transformer";
+import { Allow, IsNotEmpty, IsString } from "class-validator";
 import { IsSingleEmoji } from "src/shared/is-singe-emoji-validator";
 import { CreateUserDto } from "src/user/dto/create-user.dto";
 
@@ -7,6 +8,8 @@ export class CreateCategoryDto {
 
   user: CreateUserDto;
 
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
   @IsNotEmpty()
   name: string;
 
