@@ -8,6 +8,7 @@ import { DataSource, In, Repository } from 'typeorm';
 import { AccountService } from 'src/account/account.service';
 import { PersonalAccountService } from 'src/account/personal-account.service';
 import { assertAccountRef } from 'src/shared/account-ref';
+import { assertSameList } from 'src/shared/same-list';
 import { CreateBillPhotoDto } from './dto/create-bill-photo.dto';
 import { CreateBillDto } from './dto/create-bill.dto';
 import { UpdateBillDto } from './dto/update-bill.dto';
@@ -42,7 +43,21 @@ export class BillService {
     await assertAccountRef(account, userId, this.accountService);
   }
 
-  /** No account (the current web app, or the subscription cron) means the creator's Personal account. */
+  /**
+   * Checks a new bill before anything is saved: the account reference, the
+   * Personal default for a missing account, then R2 against that account.
+   */
+  async assertNewBill(dto: CreateBillDto, userId: number) {
+    await this.assertTargetAccount(dto.account, userId);
+    if (dto.account == null) dto.account = await this.personalAccounts.ensurePersonal(userId);
+    await assertSameList(this.dataSource.manager, dto.account, dto.shop, dto.category);
+  }
+
+  /**
+   * No account (the current web app, or the subscription cron) means the
+   * creator's Personal account. Does not check R2: the cron copies a
+   * subscription, which was checked when it was saved.
+   */
   async create(createBillDto: CreateBillDto) {
     if (createBillDto.account == null && createBillDto.user?.id != null) {
       createBillDto.account = await this.personalAccounts.ensurePersonal(createBillDto.user.id);
@@ -77,13 +92,7 @@ export class BillService {
         'photos',
       ],
     });
-    if (
-      !bill ||
-      !(
-        bill.user?.id === userId ||
-        bill.account?.users?.some((u) => u.id === userId)
-      )
-    ) {
+    if (!bill?.account?.users?.some((u) => u.id === userId)) {
       throw new NotFoundException();
     }
     return bill;
@@ -101,16 +110,16 @@ export class BillService {
     return result;
   }
 
+  /** The bills of every account the user belongs to. */
   getBillsByUserId(id: number) {
     return this.billRepository
       .createQueryBuilder('bill')
       .leftJoinAndSelect('bill.user', 'user')
-      .leftJoinAndSelect('bill.account', 'account')
-      .leftJoinAndSelect('account.users', 'accountUsers') // Many-to-many
+      .innerJoinAndSelect('bill.account', 'account')
+      .innerJoin('account.users', 'member', 'member.id = :id', { id })
+      .leftJoinAndSelect('account.users', 'accountUsers') // all members, as before
       .leftJoinAndSelect('bill.shop', 'shop')
       .leftJoinAndSelect('bill.category', 'category')
-      .where('user.id = :id', { id })
-      .orWhere('accountUsers.id = :id', { id })
       .orderBy('bill.date', 'DESC')
       .getMany();
   }
@@ -145,6 +154,14 @@ export class BillService {
 
       if (dto.account === null) {
         dto.account = await this.personalAccounts.ensurePersonal(bill.user?.id ?? userId);
+      }
+      if (dto.account !== undefined || dto.shop !== undefined || dto.category !== undefined) {
+        await assertSameList(
+          this.dataSource.manager,
+          dto.account !== undefined ? dto.account : bill.account,
+          dto.shop !== undefined ? dto.shop : bill.shop,
+          dto.category !== undefined ? dto.category : bill.category,
+        );
       }
 
       const fields: Partial<Bill> = {};

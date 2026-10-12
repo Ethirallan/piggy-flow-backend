@@ -48,6 +48,7 @@ export class BillController {
 
   @Get('getBillsByUser')
   async getBillsByUserId(@Req() req: any) {
+    if (!req.user) throw new NotFoundException();
     return this.billService.getBillsByUserId(req.user.id);
   }
 
@@ -119,7 +120,7 @@ export class BillController {
       }
       const createBillDto = Object.assign(new CreateBillDto(), data);
       createBillDto.user = req.user;
-      await this.billService.assertTargetAccount(createBillDto.account, req.user.id);
+      await this.billService.assertNewBill(createBillDto, req.user.id);
       bill = await this.billService.create(createBillDto);
     } catch (e) {
       // Nothing references the uploads yet.

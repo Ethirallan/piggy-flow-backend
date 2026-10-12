@@ -2,10 +2,11 @@ import { CreateSubscriptionDto } from './dto/create-subscription.dto';
 import { UpdateSubscriptionDto } from './dto/update-subscription.dto';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { AccountService } from 'src/account/account.service';
 import { PersonalAccountService } from 'src/account/personal-account.service';
 import { assertAccountRef } from 'src/shared/account-ref';
+import { assertSameList } from 'src/shared/same-list';
 import { Subscription } from './entities/subscription.entity';
 
 const UPDATABLE_FIELDS = ['account', 'chargeDay', 'shop', 'category', 'price', 'name'] as const;
@@ -17,20 +18,21 @@ export class SubscriptionService {
     private subscriptionRepository: Repository<Subscription>,
     private accountService: AccountService,
     private personalAccounts: PersonalAccountService,
+    private dataSource: DataSource,
   ) { }
 
-  /** No account (the current web app) means the creator's Personal account. */
-  async create(createSubscriptionDto: CreateSubscriptionDto) {
-    if (createSubscriptionDto.account == null && createSubscriptionDto.user?.id != null) {
-      createSubscriptionDto.account = await this.personalAccounts.ensurePersonal(createSubscriptionDto.user.id);
-    }
-    return this.subscriptionRepository.save(createSubscriptionDto);
-  }
-
-  /** Creates a subscription; a target account must be one the user belongs to. */
+  /**
+   * Creates a subscription. A target account must be one the user belongs to;
+   * no account (the current web app) means the creator's Personal account.
+   * The shop and category must be from that account (R2).
+   */
   async createOwned(userId: number | undefined, dto: CreateSubscriptionDto) {
     await this.assertTargetAccount(dto.account, userId);
-    return this.create(dto);
+    if (dto.account == null && dto.user?.id != null) {
+      dto.account = await this.personalAccounts.ensurePersonal(dto.user.id);
+    }
+    await assertSameList(this.dataSource.manager, dto.account, dto.shop, dto.category);
+    return this.subscriptionRepository.save(dto);
   }
 
   private async assertTargetAccount(account: unknown, userId: number | undefined) {
@@ -51,13 +53,10 @@ export class SubscriptionService {
     }
   }
 
+  /** The subscriptions of every account the user belongs to. */
   getSubscriptionsByUserId(id: number) {
     return this.subscriptionRepository.find({
-      where: {
-        user: {
-          id: id
-        }
-      },
+      where: { account: { users: { id } } },
       relations: ['user', 'account', 'shop', 'category']
     });
   }
@@ -68,10 +67,7 @@ export class SubscriptionService {
       where: { id },
       relations: ['user', 'account', 'account.users', 'shop', 'category'],
     });
-    if (
-      !subscription ||
-      !(subscription.user?.id === userId || subscription.account?.users?.some((u) => u.id === userId))
-    ) {
+    if (!subscription?.account?.users?.some((u) => u.id === userId)) {
       throw new NotFoundException();
     }
     return subscription;
@@ -87,6 +83,14 @@ export class SubscriptionService {
     await this.assertTargetAccount(changes.account, userId);
     if (changes.account === null) {
       changes.account = await this.personalAccounts.ensurePersonal(subscription.user?.id ?? userId);
+    }
+    if ('account' in changes || 'shop' in changes || 'category' in changes) {
+      await assertSameList(
+        this.dataSource.manager,
+        'account' in changes ? changes.account : subscription.account,
+        'shop' in changes ? changes.shop : subscription.shop,
+        'category' in changes ? changes.category : subscription.category,
+      );
     }
     return this.subscriptionRepository.update(id, changes);
   }

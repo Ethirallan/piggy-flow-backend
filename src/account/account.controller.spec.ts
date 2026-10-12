@@ -1,4 +1,4 @@
-import { INestApplication, NotFoundException } from '@nestjs/common';
+import { BadRequestException, INestApplication, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as request from 'supertest';
 import { AccountController } from './account.controller';
@@ -7,7 +7,7 @@ import { AccountService } from './account.service';
 describe('AccountController', () => {
   let app: INestApplication;
   let user: any;
-  const service = { create: jest.fn(), updateMember: jest.fn(), removeMember: jest.fn() };
+  const service = { create: jest.fn(), updateMember: jest.fn(), removeMember: jest.fn(), getAccountsByUserId: jest.fn() };
 
   beforeEach(async () => {
     jest.resetAllMocks();
@@ -46,6 +46,22 @@ describe('AccountController', () => {
     expect((await request(app.getHttpServer()).delete('/account/5')).status).toBe(404);
     expect(service.updateMember).not.toHaveBeenCalled();
     expect(service.removeMember).not.toHaveBeenCalled();
+  });
+
+  it('the list passes the request user id, and gives 404 without a user', async () => {
+    service.getAccountsByUserId.mockResolvedValue([{ id: 1 }]);
+    expect((await request(app.getHttpServer()).get('/account/getAccountsByUser')).body).toEqual([{ id: 1 }]);
+    expect(service.getAccountsByUserId).toHaveBeenCalledWith(7);
+    user = undefined;
+    expect((await request(app.getHttpServer()).get('/account/getAccountsByUser')).status).toBe(404);
+    expect(service.getAccountsByUserId).toHaveBeenCalledTimes(1);
+  });
+
+  it('DELETE of the Personal account gives the 400 message', async () => {
+    service.removeMember.mockRejectedValue(new BadRequestException("The Personal account can't be deleted."));
+    const res = await request(app.getHttpServer()).delete('/account/5');
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe("The Personal account can't be deleted.");
   });
 
   it('a 404 from the service reaches the client', async () => {

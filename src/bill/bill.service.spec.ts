@@ -23,14 +23,16 @@ describe('BillService', () => {
   let bills: { findOne: jest.Mock; delete: jest.Mock };
   let photos: { count: jest.Mock };
   let manager: { update: jest.Mock; delete: jest.Mock; insert: jest.Mock };
-  let dataSource: { transaction: jest.Mock };
+  let dataSource: { transaction: jest.Mock; manager: { findOne: jest.Mock } };
+  /** Shop and category rows by id, as R2 loads them (with their account). */
+  let lists: Record<string, { id: number; account: { id: number } | null }>;
   let accounts: { assertMember: jest.Mock };
   let personal: { ensurePersonal: jest.Mock };
 
   const bill = (over: any = {}) => ({
     id: 5,
     user: { id: 1 },
-    account: { id: 9, users: [{ id: 2 }] },
+    account: { id: 9, users: [{ id: 1 }, { id: 2 }] },
     photos: [{ id: 1, path: 'a.jpg' }, { id: 2, path: 'b.png' }],
     ...over,
   });
@@ -49,7 +51,13 @@ describe('BillService', () => {
       delete: jest.fn().mockResolvedValue({ affected: 1 }),
       insert: jest.fn().mockResolvedValue({}),
     };
-    dataSource = { transaction: jest.fn((cb) => cb(manager)) };
+    lists = {};
+    dataSource = {
+      transaction: jest.fn((cb) => cb(manager)),
+      manager: {
+        findOne: jest.fn(async (entity, { where }) => lists[`${entity.name}:${where.id}`] ?? null),
+      },
+    };
     accounts = { assertMember: jest.fn().mockResolvedValue({}) };
     personal = { ensurePersonal: jest.fn().mockResolvedValue({ id: 3 }) };
     const module: TestingModule = await Test.createTestingModule({
@@ -82,7 +90,7 @@ describe('BillService', () => {
   });
 
   describe('getOwnedBill', () => {
-    it('loads the bill with its relations and returns it for the creator', async () => {
+    it('loads the bill with its relations and returns it for a member', async () => {
       const b = bill();
       bills.findOne.mockResolvedValue(b);
       await expect(service.getOwnedBill(5, 1)).resolves.toBe(b);
@@ -103,6 +111,11 @@ describe('BillService', () => {
       await expect(service.getOwnedBill(5, 3)).rejects.toBeInstanceOf(NotFoundException);
     });
 
+    it('throws NotFoundException for the creator once they are not a member of the bill account', async () => {
+      bills.findOne.mockResolvedValue(bill({ account: { id: 9, users: [{ id: 2 }] } }));
+      await expect(service.getOwnedBill(5, 1)).rejects.toBeInstanceOf(NotFoundException);
+    });
+
     it('throws NotFoundException for a bill without account or user', async () => {
       bills.findOne.mockResolvedValue(bill({ user: null, account: null }));
       await expect(service.getOwnedBill(5, 3)).rejects.toBeInstanceOf(NotFoundException);
@@ -118,6 +131,71 @@ describe('BillService', () => {
       await expect(service.getOwnedBill(5, undefined as any)).rejects.toBeInstanceOf(
         NotFoundException,
       );
+    });
+  });
+
+  describe('getBillsByUserId', () => {
+    it('lists the bills of the accounts the user belongs to, not the bills they created', async () => {
+      const calls: [string, any[]][] = [];
+      const qb: any = new Proxy({}, {
+        get: (_t, name: string) => (...args: any[]) => {
+          calls.push([name, args]);
+          return name === 'getMany' ? Promise.resolve([{ id: 1 }]) : qb;
+        },
+      });
+      (bills as any).createQueryBuilder = jest.fn(() => qb);
+      await expect(service.getBillsByUserId(7)).resolves.toEqual([{ id: 1 }]);
+      expect(calls).toContainEqual([
+        'innerJoin',
+        ['account.users', 'member', 'member.id = :id', { id: 7 }],
+      ]);
+      const sql = JSON.stringify(calls);
+      expect(sql).not.toContain('user.id');
+      expect(sql).not.toContain('orWhere');
+    });
+  });
+
+  describe('assertNewBill (R2 on create)', () => {
+    const R2 = new BadRequestException("Shop and category must be from the bill's account.");
+    beforeEach(() => {
+      lists['Shop:11'] = { id: 11, account: { id: 9 } };
+      lists['Category:12'] = { id: 12, account: { id: 9 } };
+      lists['Shop:21'] = { id: 21, account: { id: 4 } };
+      lists['Category:13'] = { id: 13, account: { id: 3 } };
+    });
+
+    it('lets a shop and category from the bill account through', async () => {
+      const dto: any = { user: { id: 1 }, account: { id: 9 }, shop: { id: 11 }, category: { id: 12 } };
+      await expect(service.assertNewBill(dto, 1)).resolves.toBeUndefined();
+      expect(accounts.assertMember).toHaveBeenCalledWith(9, 1);
+    });
+
+    it('gives 400 for a shop from another account', async () => {
+      const dto: any = { user: { id: 1 }, account: { id: 9 }, shop: { id: 21 }, category: { id: 12 } };
+      await expect(service.assertNewBill(dto, 1)).rejects.toEqual(R2);
+    });
+
+    it('checks against the Personal account when no account is given', async () => {
+      const dto: any = { user: { id: 1 }, account: null, shop: { id: 11 }, category: { id: 13 } };
+      await expect(service.assertNewBill(dto, 1)).rejects.toEqual(R2);
+      expect(personal.ensurePersonal).toHaveBeenCalledWith(1);
+      expect(dto.account).toEqual({ id: 3 });
+      lists['Shop:11'].account = { id: 3 };
+      await expect(service.assertNewBill({ ...dto, account: undefined }, 1)).resolves.toBeUndefined();
+    });
+
+    it('gives 400 for a shop that does not exist or a malformed shop', async () => {
+      for (const shop of [{ id: 999 }, 11, '11', { id: '11' }, []]) {
+        const dto: any = { user: { id: 1 }, account: { id: 9 }, shop, category: { id: 12 } };
+        await expect(service.assertNewBill(dto, 1)).rejects.toEqual(R2);
+      }
+    });
+
+    it('checks the account reference before R2', async () => {
+      accounts.assertMember.mockRejectedValue(new NotFoundException());
+      const dto: any = { user: { id: 1 }, account: { id: 77 }, shop: { id: 11 } };
+      await expect(service.assertNewBill(dto, 1)).rejects.toBeInstanceOf(NotFoundException);
+      expect(dataSource.manager.findOne).not.toHaveBeenCalled();
     });
   });
 
@@ -305,6 +383,61 @@ describe('BillService', () => {
       await service.updateWithPhotos(5, 1, { price: 4 } as any, []);
       expect(personal.ensurePersonal).not.toHaveBeenCalled();
       expect(manager.update).toHaveBeenCalledWith(expect.anything(), 5, { price: 4 });
+    });
+
+    describe('R2', () => {
+      const R2 = new BadRequestException("Shop and category must be from the bill's account.");
+      beforeEach(() => {
+        bills.findOne.mockResolvedValue(bill({ shop: { id: 11 }, category: { id: 12 } }));
+        lists['Shop:11'] = { id: 11, account: { id: 9 } };
+        lists['Category:12'] = { id: 12, account: { id: 9 } };
+        lists['Shop:31'] = { id: 31, account: { id: 8 } };
+        lists['Category:32'] = { id: 32, account: { id: 8 } };
+      });
+
+      it('gives 400 when only the account changes and the shop is not in the new account, and deletes the new uploads', async () => {
+        await expect(
+          service.updateWithPhotos(5, 1, { account: { id: 8 } } as any, [file('n1.jpg')]),
+        ).rejects.toEqual(R2);
+        expect(dataSource.transaction).not.toHaveBeenCalled();
+        expect(encodeImageToBlurhash).not.toHaveBeenCalled();
+        expect(deleteCalls()).toHaveLength(1);
+        const [paths, isReferenced] = deleteCalls()[0];
+        expect(paths).toEqual(['n1.jpg']);
+        photos.count.mockResolvedValue(0);
+        await expect(isReferenced('n1.jpg')).resolves.toBe(false);
+      });
+
+      it('gives 400 for a new shop from another account', async () => {
+        await expect(
+          service.updateWithPhotos(5, 1, { shop: { id: 31 } } as any, []),
+        ).rejects.toEqual(R2);
+        expect(dataSource.transaction).not.toHaveBeenCalled();
+      });
+
+      it('checks a null account against the Personal account', async () => {
+        await expect(
+          service.updateWithPhotos(5, 1, { account: null } as any, []),
+        ).rejects.toEqual(R2);
+        expect(personal.ensurePersonal).toHaveBeenCalledWith(1);
+      });
+
+      it('passes a valid change of account, shop and category', async () => {
+        const dto = { account: { id: 8 }, shop: { id: 31 }, category: { id: 32 } } as any;
+        await expect(service.updateWithPhotos(5, 1, dto, [])).resolves.toBe(fresh);
+        expect(manager.update).toHaveBeenCalledWith(Bill, 5, dto);
+      });
+
+      it('allows clearing the shop and skips the check when no list field changes', async () => {
+        await service.updateWithPhotos(5, 1, { comment: 'x' } as any, []);
+        expect(dataSource.manager.findOne).not.toHaveBeenCalled();
+        await service.updateWithPhotos(5, 1, { account: { id: 8 }, shop: null, category: { id: 32 } } as any, []);
+        expect(manager.update).toHaveBeenLastCalledWith(Bill, 5, {
+          account: { id: 8 },
+          shop: null,
+          category: { id: 32 },
+        });
+      });
     });
 
     it('returns 404 for a stranger and deletes the new files', async () => {

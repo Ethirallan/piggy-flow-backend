@@ -8,7 +8,7 @@ import { BillService } from '../bill/bill.service';
 describe('SubscriptionController', () => {
   let app: INestApplication;
   let user: any;
-  const service = { createOwned: jest.fn(), getSubscriptionById: jest.fn(), getOwned: jest.fn(), updateOwned: jest.fn(), removeOwned: jest.fn(), getSubscriptionsByDay: jest.fn() };
+  const service = { createOwned: jest.fn(), getSubscriptionById: jest.fn(), getOwned: jest.fn(), updateOwned: jest.fn(), removeOwned: jest.fn(), getSubscriptionsByDay: jest.fn(), getSubscriptionsByUserId: jest.fn() };
   const bills = { create: jest.fn() };
 
   beforeEach(async () => {
@@ -42,6 +42,16 @@ describe('SubscriptionController', () => {
     expect(service.getOwned).toHaveBeenCalledWith(5, 7);
     expect(service.updateOwned).toHaveBeenCalledWith(5, 7, { price: 3 });
     expect(service.removeOwned).toHaveBeenCalledWith(5, 7);
+  });
+
+  it('the list passes the request user id, and gives 404 without a user', async () => {
+    service.getSubscriptionsByUserId.mockResolvedValue([{ id: 1 }]);
+    const http = app.getHttpServer();
+    expect((await request(http).get('/subscription/getSubscriptionsByUser')).body).toEqual([{ id: 1 }]);
+    expect(service.getSubscriptionsByUserId).toHaveBeenCalledWith(7);
+    user = null;
+    expect((await request(http).get('/subscription/getSubscriptionsByUser')).status).toBe(404);
+    expect(service.getSubscriptionsByUserId).toHaveBeenCalledTimes(1);
   });
 
   it('a non-numeric id gives 400', async () => {
@@ -97,6 +107,17 @@ describe('SubscriptionController', () => {
       expect(res.status).toBe(200);
       expect(events).toEqual(['start s1', 'end s1', 'start s2', 'end s2']);
       expect(bills.create).toHaveBeenCalledWith(expect.objectContaining({ user: { id: 7 }, account: null, comment: 's1' }));
+    });
+
+    it('bills inherit the subscription\'s account, shop and category', async () => {
+      const s = { ...sub(3), account: { id: 5 }, shop: { id: 11 }, category: { id: 12 } };
+      service.getSubscriptionsByDay.mockResolvedValue([s]);
+      bills.create.mockResolvedValue({ id: 1 });
+      const res = await request(app.getHttpServer()).get('/subscription/insertSubscriptions/s3cret');
+      expect(res.status).toBe(200);
+      expect(bills.create).toHaveBeenCalledWith(
+        expect.objectContaining({ user: { id: 7 }, account: { id: 5 }, shop: { id: 11 }, category: { id: 12 }, price: 3, comment: 's3' }),
+      );
     });
 
     it('a failing create makes the endpoint fail (500) instead of an unhandled rejection', async () => {

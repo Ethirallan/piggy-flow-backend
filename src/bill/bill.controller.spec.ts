@@ -16,6 +16,7 @@ describe('BillController', () => {
   const service = {
     getOwnedBill: jest.fn(),
     removeOwned: jest.fn(),
+    getBillsByUserId: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -45,6 +46,16 @@ describe('BillController', () => {
     expect(service.getOwnedBill).not.toHaveBeenCalled();
   });
 
+  it('getBillsByUserId passes the request user id, and gives 404 without a user', async () => {
+    service.getBillsByUserId.mockResolvedValue([{ id: 1 }]);
+    await expect(controller.getBillsByUserId({ user: { id: 7 } })).resolves.toEqual([{ id: 1 }]);
+    expect(service.getBillsByUserId).toHaveBeenCalledWith(7);
+    await expect(controller.getBillsByUserId({ user: null })).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+    expect(service.getBillsByUserId).toHaveBeenCalledTimes(1);
+  });
+
   it('remove passes the request user id and returns the delete result', async () => {
     service.removeOwned.mockResolvedValue({ affected: 1 });
     await expect(controller.remove(5, { user: { id: 7 } })).resolves.toEqual({ affected: 1 });
@@ -68,7 +79,7 @@ describe('BillController (HTTP)', () => {
     create: jest.fn(),
     addPhoto: jest.fn(),
     getBillById: jest.fn(),
-    assertTargetAccount: jest.fn(),
+    assertNewBill: jest.fn(),
     isPhotoPathReferenced: jest.fn(),
   };
   const V4_JPG = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.jpg$/;
@@ -258,19 +269,43 @@ describe('BillController (HTTP)', () => {
       expect(service.getBillById).toHaveBeenCalledWith(10);
     });
 
-    it('checks the target account before creating, then lets a member through', async () => {
+    it('checks the new bill (account and R2) before creating, then lets it through', async () => {
       service.create.mockResolvedValue({ id: 13 });
       service.getBillById.mockResolvedValue({ id: 13 });
       const res = await request(app.getHttpServer())
         .post('/bill')
         .field('body', JSON.stringify({ price: 1, account: { id: 4 } }));
       expect(res.status).toBe(201);
-      expect(service.assertTargetAccount).toHaveBeenCalledWith({ id: 4 }, 7);
-      expect(service.create).toHaveBeenCalledTimes(1);
+      expect(service.assertNewBill).toHaveBeenCalledWith(
+        expect.objectContaining({ price: 1, account: { id: 4 }, user }),
+        7,
+      );
+      expect(service.assertNewBill.mock.invocationCallOrder[0]).toBeLessThan(
+        service.create.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('gives the R2 400, writes nothing and discards the uploads without asking the DB', async () => {
+      service.assertNewBill.mockRejectedValue(
+        new BadRequestException("Shop and category must be from the bill's account."),
+      );
+      // Even if the DB claimed the paths were referenced, nothing was saved yet.
+      service.isPhotoPathReferenced.mockResolvedValue(true);
+      const res = await request(app.getHttpServer())
+        .post('/bill')
+        .field('body', JSON.stringify({ price: 1, shop: { id: 21 }, category: { id: 2 } }))
+        .attach('files', Buffer.from('one'), 'a.jpg')
+        .attach('files', Buffer.from('two'), 'b.jpg');
+      expect(res.status).toBe(400);
+      expect(res.body.message).toBe("Shop and category must be from the bill's account.");
+      expect(service.create).not.toHaveBeenCalled();
+      expect(service.addPhoto).not.toHaveBeenCalled();
+      expect(service.isPhotoPathReferenced).not.toHaveBeenCalled();
+      expect(uploaded()).toEqual([]);
     });
 
     it('gives 404 for a non-member target account, writes nothing and removes the uploads', async () => {
-      service.assertTargetAccount.mockRejectedValue(new NotFoundException());
+      service.assertNewBill.mockRejectedValue(new NotFoundException());
       const res = await request(app.getHttpServer())
         .post('/bill')
         .field('body', JSON.stringify({ price: 1, account: { id: 4 } }))
@@ -282,7 +317,7 @@ describe('BillController (HTTP)', () => {
     });
 
     it('removes the uploads when the account check gives 400', async () => {
-      service.assertTargetAccount.mockRejectedValue(new BadRequestException('Invalid account.'));
+      service.assertNewBill.mockRejectedValue(new BadRequestException('Invalid account.'));
       const res = await request(app.getHttpServer())
         .post('/bill')
         .field('body', JSON.stringify({ price: 1, account: 77 }))

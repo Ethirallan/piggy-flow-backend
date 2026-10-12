@@ -19,6 +19,7 @@ export class SubscriptionController {
 
   @Get('getSubscriptionsByUser')
   async getSubscriptionsByUserId(@Req() req: any) {
+    if (!req.user) throw new NotFoundException();
     return this.subscriptionService.getSubscriptionsByUserId(req.user.id);
   }
 

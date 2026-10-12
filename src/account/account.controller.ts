@@ -18,6 +18,7 @@ export class AccountController {
 
   @Get('getAccountsByUser')
   getAccountsByUserId(@Req() req: any) {
+    if (!req.user) throw new NotFoundException();
     return this.accountService.getAccountsByUserId(req.user.id);
   }
 
