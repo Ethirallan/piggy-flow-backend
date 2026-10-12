@@ -26,8 +26,14 @@ const copy = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 
 class MemStore implements AccountsStore {
   data: Data;
-  /** Return 'false' to make a conditional write match no row, 'throw' to fail it. */
-  onWrite?: (method: string, id: number) => 'false' | 'throw' | void;
+  /**
+   * 'false': the conditional write matches no row. 'throw': it fails without
+   * writing. 'commit-throw': it writes, then fails (connection lost after commit).
+   */
+  onWrite?: (
+    method: string,
+    id: number,
+  ) => 'false' | 'throw' | 'commit-throw' | void;
 
   constructor(data: Partial<Data>) {
     this.data = copy({
@@ -41,10 +47,18 @@ class MemStore implements AccountsStore {
     });
   }
 
-  private hook(method: string, id: number): boolean {
-    const r = this.onWrite?.(method, id);
-    if (r === 'throw') throw new Error(`${method} failed on ${id}`);
-    return r !== 'false';
+  private cond(
+    method: string,
+    id: number,
+    matches: boolean,
+    write: () => void,
+  ): boolean {
+    const h = this.onWrite?.(method, id);
+    if (h === 'throw') throw new Error(`${method} failed on ${id}`);
+    if (h === 'false' || !matches) return false;
+    write();
+    if (h === 'commit-throw') throw new Error(`${method} lost after commit`);
+    return true;
   }
 
   private nextId(rows: { id: number }[]) {
@@ -79,15 +93,12 @@ class MemStore implements AccountsStore {
   }
   async clearPersonal(accountId: number, expectedName: string) {
     const a = this.data.accounts.find((x) => x.id === accountId);
-    if (
-      !this.hook('clearPersonal', accountId) ||
-      !a?.personal ||
-      a.name !== expectedName
-    )
-      return false;
-    a.personal = false;
-    a.name = 'Personal (duplicate)';
-    return true;
+    return this.cond(
+      'clearPersonal',
+      accountId,
+      a?.personal && a.name === expectedName,
+      () => Object.assign(a, { personal: false, name: 'Personal (duplicate)' }),
+    );
   }
   async setRefAccount(
     table: RefTable,
@@ -96,10 +107,9 @@ class MemStore implements AccountsStore {
     accountId: number,
   ) {
     const r = this.data[table].find((x) => x.id === id);
-    if (!this.hook('setRefAccount', id) || !r || r.accountId !== expected)
-      return false;
-    r.accountId = accountId;
-    return true;
+    return this.cond('setRefAccount', id, r?.accountId === expected, () => {
+      r.accountId = accountId;
+    });
   }
   async setListAccount(
     table: Table,
@@ -108,10 +118,9 @@ class MemStore implements AccountsStore {
     accountId: number,
   ) {
     const r = this.data[table].find((x) => x.id === id);
-    if (!this.hook('setListAccount', id) || !r || r.accountId !== expected)
-      return false;
-    r.accountId = accountId;
-    return true;
+    return this.cond('setListAccount', id, r?.accountId === expected, () => {
+      r.accountId = accountId;
+    });
   }
   async insertListCopy(table: Table, source: ListRow, accountId: number) {
     const id = this.nextId(this.data[table]);
@@ -126,9 +135,9 @@ class MemStore implements AccountsStore {
     newId: number,
   ) {
     const r = this.data[table].find((x) => x.id === id);
-    if (!this.hook('repoint', id) || !r || r[field] !== expected) return false;
-    r[field] = newId;
-    return true;
+    return this.cond('repoint', id, r?.[field] === expected, () => {
+      r[field] = newId;
+    });
   }
 
   personalOf(userId: number) {
@@ -238,20 +247,30 @@ describe('account migration: Personal accounts and references', () => {
       perUser: { '1': { bills: 2, sum: 10.3 }, '2': { bills: 1, sum: 5 } },
     });
     expect(log.slice(1).map((l) => l.kind)).toEqual([
-      'personal',
-      'personal',
-      'ref-account',
-      'ref-account',
-      'ref-account',
+      'applied',
+      'applied',
+      'intent',
+      'applied',
+      'intent',
+      'applied',
+      'intent',
+      'applied',
     ]);
-    expect(log[1]).toEqual({ kind: 'personal', userId: 1, newId: 1 });
-    expect(log[3]).toEqual({
+    expect(log[1]).toEqual({
+      kind: 'applied',
+      action: { kind: 'personal', userId: 1, newId: 1 },
+    });
+    const ref = {
       kind: 'ref-account',
       table: 'bill',
       id: 1,
       from: null,
       to: 1,
-    });
+    };
+    expect(log.slice(3, 5)).toEqual([
+      { kind: 'intent', action: ref },
+      { kind: 'applied', action: ref },
+    ]);
 
     await runMigration(store, logFile); // appending to an existing log adds no second totals line
     expect((await readLog()).filter((l) => l.kind === 'totals')).toHaveLength(
@@ -276,14 +295,20 @@ describe('account migration: Personal accounts and references', () => {
     };
     expect(res).toEqual({ applied: 2, skipped: [skipped] });
     expect(store.data.bill[1].accountId).toBe(1);
+    const moved = { ...skipped, id: 2 };
     expect((await readLog()).slice(1)).toEqual([
-      { kind: 'personal', userId: 1, newId: 1 },
+      {
+        kind: 'applied',
+        action: { kind: 'personal', userId: 1, newId: 1 },
+      },
+      { kind: 'intent', action: skipped },
       {
         kind: 'skipped',
         reason: 'conditional write matched no row',
         action: skipped,
       },
-      { kind: 'ref-account', table: 'bill', id: 2, from: null, to: 1 },
+      { kind: 'intent', action: moved },
+      { kind: 'applied', action: moved },
     ]);
   });
 
@@ -344,6 +369,88 @@ describe('account migration: Personal accounts and references', () => {
       ]);
       expect(store.personalOf(1).map((a) => a.id)).toEqual([4, 3]);
     });
+
+    it('converges after a throw partway through the moves, demoting the extra only at the end', async () => {
+      const straight = twoPersonals();
+      await runMigration(straight, logFile + '.straight');
+
+      const store = twoPersonals();
+      store.onWrite = (method) =>
+        method === 'setListAccount' ? 'throw' : undefined;
+      await expect(runMigration(store, logFile)).rejects.toThrow(
+        'setListAccount failed',
+      );
+      expect(store.data.bill.map((b) => b.accountId)).toEqual([3, 3]);
+      expect(store.data.shop.map((s) => s.accountId)).toEqual([3, 4]);
+      expect(store.personalOf(1).map((a) => a.id)).toEqual([4, 3]);
+
+      store.onWrite = undefined;
+      expect(await planMigration(store)).toEqual([
+        { kind: 'dedupe-move', table: 'shop', id: 2, from: 4, to: 3 },
+        {
+          kind: 'dedupe-personal',
+          userId: 1,
+          keep: 3,
+          extra: 4,
+          name: 'Personal',
+        },
+      ]);
+      await runMigration(store, logFile);
+      expect(store.data).toEqual(straight.data);
+      expect(await planMigration(store)).toEqual([]);
+    });
+
+    it('leaves a Personal account shared with another user unchanged and never targets it', async () => {
+      const store = new MemStore({
+        users: [{ id: 1 }, { id: 2 }],
+        accounts: [
+          { id: 3, name: 'Personal', personal: true, members: [1] },
+          { id: 4, name: 'Personal', personal: true, members: [1, 2] },
+        ],
+        bill: [bill(1, 2, null), bill(2, 1, 4)],
+      });
+      expect(await planMigration(store)).toEqual([
+        {
+          kind: 'skip',
+          table: 'account',
+          id: 4,
+          reason: 'Personal account shared by users 1, 2; left unchanged',
+        },
+        { kind: 'personal', userId: 2 },
+        { kind: 'ref-account', table: 'bill', id: 1, from: null, to: -2 },
+      ]);
+      await runMigration(store, logFile);
+      expect(store.data.accounts.find((a) => a.id === 4).personal).toBe(true);
+      expect(store.data.bill.map((b) => b.accountId)).toEqual([5, 4]);
+    });
+  });
+
+  it('logs the intent even when the write commits and then throws', async () => {
+    const store = new MemStore({
+      users: [{ id: 1 }],
+      bill: [bill(1, 1, null)],
+    });
+    store.onWrite = (method) =>
+      method === 'setRefAccount' ? 'commit-throw' : undefined;
+    await expect(runMigration(store, logFile)).rejects.toThrow(
+      'lost after commit',
+    );
+    expect(store.data.bill[0].accountId).toBe(1);
+    expect((await readLog()).slice(1)).toEqual([
+      { kind: 'applied', action: { kind: 'personal', userId: 1, newId: 1 } },
+      {
+        kind: 'intent',
+        action: {
+          kind: 'ref-account',
+          table: 'bill',
+          id: 1,
+          from: null,
+          to: 1,
+        },
+      },
+    ]);
+    store.onWrite = undefined;
+    expect(await planMigration(store)).toEqual([]);
   });
 });
 
@@ -416,24 +523,37 @@ describe('account migration: shops and categories', () => {
     expect(store.data.shop).toEqual([lidl(P), { ...lidl(H), id: 2 }]);
     expect(store.data.bill.map((b) => b.shopId)).toEqual([1, 1, 1, 2]);
     expect(res).toEqual({ applied: 3, skipped: [] });
+    const move = {
+      kind: 'list-account',
+      table: 'shop',
+      id: 1,
+      from: null,
+      to: P,
+    };
+    const repoint = {
+      kind: 'repoint',
+      table: 'bill',
+      id: 4,
+      field: 'shopId',
+      from: 1,
+      to: 2,
+    };
     expect((await readLog()).slice(1)).toEqual([
-      { kind: 'list-account', table: 'shop', id: 1, from: null, to: P },
+      { kind: 'intent', action: move },
+      { kind: 'applied', action: move },
       {
-        kind: 'copy',
-        table: 'shop',
-        sourceId: 1,
-        to: H,
-        refs: [{ table: 'bill', id: 4 }],
-        newId: 2,
+        kind: 'applied',
+        action: {
+          kind: 'copy',
+          table: 'shop',
+          sourceId: 1,
+          to: H,
+          refs: [{ table: 'bill', id: 4 }],
+          newId: 2,
+        },
       },
-      {
-        kind: 'repoint',
-        table: 'bill',
-        id: 4,
-        field: 'shopId',
-        from: 1,
-        to: 2,
-      },
+      { kind: 'intent', action: repoint },
+      { kind: 'applied', action: repoint },
     ]);
     expect(await runMigration(store, logFile)).toEqual({
       applied: 0,
@@ -585,5 +705,77 @@ describe('account migration: shops and categories', () => {
       },
     ]);
     expect(store.data.shop).toEqual([orphan]);
+  });
+
+  it('keeps the winner stable when a Personal account is created in the same run', async () => {
+    const setup = () =>
+      new MemStore({
+        users: [{ id: 1 }, { id: 2 }],
+        accounts: [{ id: 7, name: 'Personal', personal: true, members: [2] }],
+        bill: [bill(1, 1, null, 1), bill(2, 2, 7, 1)],
+        shop: [{ ...lidl(), userId: 2 }],
+      });
+    const straight = setup();
+    await runMigration(straight, logFile + '.straight');
+
+    const store = setup();
+    store.onWrite = (method) => (method === 'repoint' ? 'throw' : undefined);
+    await expect(runMigration(store, logFile)).rejects.toThrow(
+      'repoint failed',
+    );
+    store.onWrite = undefined;
+    await runMigration(store, logFile);
+
+    expect(store.data.shop).toEqual([
+      { ...lidl(7), userId: 2 },
+      { ...lidl(8), userId: 2, id: 2 },
+    ]);
+    expect(store.data.bill.map((b) => [b.accountId, b.shopId])).toEqual([
+      [8, 2],
+      [7, 1],
+    ]);
+    expect(await planMigration(store)).toEqual([]);
+    expect(store.data).toEqual(straight.data);
+  });
+
+  it('gives a subscription-only tie (0 bills each) to Personal', async () => {
+    const store = new MemStore({
+      users: [{ id: 1 }],
+      accounts: [
+        { id: 1, name: 'Household', personal: false, members: [1] },
+        { id: 2, name: 'Personal', personal: true, members: [1] },
+      ],
+      subscription: [sub(1, 1, 1), sub(2, 2, 1)],
+      shop: [lidl()],
+    });
+    await runMigration(store, logFile);
+    expect(store.data.shop.map((s) => [s.id, s.accountId])).toEqual([
+      [1, 2],
+      [2, 1],
+    ]);
+    expect(store.data.subscription.map((x) => x.shopId)).toEqual([2, 1]);
+    expect(await planMigration(store)).toEqual([]);
+  });
+
+  it('keeps a shop in its current account on a tie between shared accounts', async () => {
+    const store = new MemStore({
+      users: [{ id: 1 }],
+      accounts: [
+        { id: 1, name: 'Work', personal: false, members: [1] },
+        { id: 2, name: 'Household', personal: false, members: [1] },
+        { id: 3, name: 'Personal', personal: true, members: [1] },
+      ],
+      bill: [bill(1, 1, 1, 1), bill(2, 1, 2, 1)],
+      shop: [lidl(2)],
+    });
+    expect(await planMigration(store)).toEqual([
+      {
+        kind: 'copy',
+        table: 'shop',
+        sourceId: 1,
+        to: 1,
+        refs: [{ table: 'bill', id: 1 }],
+      },
+    ]);
   });
 });

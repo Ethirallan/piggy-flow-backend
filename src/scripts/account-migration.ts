@@ -6,11 +6,26 @@
  *   marked non-personal once their rows have moved out.
  * - Every write is conditional on the value the plan saw; a write that matches
  *   no row is logged as skipped and the run continues.
- * - Each applied write appends one fsynced JSON line to the log, so a rollback
- *   can restore every row individually. The first line of a new log holds the
- *   per-user bill totals taken before any write.
+ * - Every log line is appended and fsynced before the run goes on, so a crash
+ *   never hides a write from the rollback (see "Log lines" below).
  * - The run re-plans from the current data, so rerunning after an interruption
  *   only does what is left.
+ *
+ * Log lines (JSONL, one object per line; BE4b's verify and rollback read them):
+ * - `{ kind: 'totals', perUser: { [userId]: { bills, sum } } }`: first line of
+ *   a new log, read before any write (`totalsOf`).
+ * - `{ kind: 'intent', action }`: written and fsynced BEFORE each conditional
+ *   write. `action` carries the expected old value (`from`, or `name` for
+ *   `dedupe-personal`) and the new value (`to`), with real account ids. The
+ *   write may or may not have happened; a rollback treats an intent as a
+ *   candidate and restores only where the current value equals the new value.
+ * - `{ kind: 'applied', action }`: the write took effect. For the inserts
+ *   (`personal`, `copy`) it is written right after the insert returns and
+ *   carries `newId`; inserts have no intent line. A `copy` is followed by an
+ *   intent and an outcome line for each of its repoints (`kind: 'repoint'`).
+ * - `{ kind: 'skipped', reason, action }`: the conditional write matched no
+ *   row, or the action could not run (planned `skip`, unresolved Personal).
+ * `applied` in the result counts the `applied` lines.
  *
  * Pure over an injected `AccountsStore`, so it can be tested without MySQL.
  */
@@ -121,24 +136,29 @@ export type Action =
       from: number;
       to: number;
     }
-  | { kind: 'skip'; table: RefTable | Table; id: number; reason: string };
+  | {
+      kind: 'skip';
+      table: RefTable | Table | 'account';
+      id: number;
+      reason: string;
+    };
 
 const REF_TABLES: RefTable[] = ['bill', 'subscription'];
 const LIST_TABLES: Table[] = ['shop', 'category'];
 
 type Rows = Record<RefTable, RefRow[]> & Record<Table, ListRow[]>;
 
+// Copies, so planning can simulate moves without touching the store's rows.
+const sortedCopy = <T extends { id: number }>(list: T[]): T[] =>
+  list.map((r) => ({ ...r })).sort((a, b) => a.id - b.id);
+
 async function load(store: AccountsStore): Promise<Rows> {
-  const rows = {} as Rows;
-  for (const t of [...REF_TABLES, ...LIST_TABLES]) {
-    const list: { id: number }[] =
-      t === 'bill' || t === 'subscription'
-        ? await store.refs(t)
-        : await store.lists(t);
-    // Copies, so planning can simulate moves without touching the store's rows.
-    rows[t] = list.map((r) => ({ ...r })).sort((a, b) => a.id - b.id) as any;
-  }
-  return rows;
+  return {
+    bill: sortedCopy(await store.refs('bill')),
+    subscription: sortedCopy(await store.refs('subscription')),
+    shop: sortedCopy(await store.lists('shop')),
+    category: sortedCopy(await store.lists('category')),
+  };
 }
 
 /** Reads the data and returns the actions, in apply order. Writes nothing. */
@@ -152,15 +172,30 @@ async function plan(store: AccountsStore) {
   const personalOf = new Map<number, number>();
 
   // 0. Duplicate Personal accounts: the lowest id is kept. The user's rows move
-  //    into it first; only then is the duplicate marked non-personal.
+  //    into it first; only then is the duplicate marked non-personal. A
+  //    Personal account with several members is left alone and never used as
+  //    anyone's Personal.
   const byUser = new Map<number, PersonalRow[]>();
+  const members = new Map<number, Set<number>>();
   for (const p of await store.personalAccounts()) {
     const mine = byUser.get(p.userId) ?? [];
     if (!mine.some((m) => m.accountId === p.accountId)) mine.push(p);
     byUser.set(p.userId, mine);
+    members.set(
+      p.accountId,
+      (members.get(p.accountId) ?? new Set()).add(p.userId),
+    );
   }
   const clears: Action[] = [];
-  for (const [userId, mine] of [...byUser].sort((a, b) => a[0] - b[0])) {
+  for (const [accountId, users] of [...members].sort((a, b) => a[0] - b[0])) {
+    if (users.size < 2) continue;
+    const ids = [...users].sort((a, b) => a - b).join(', ');
+    const reason = `Personal account shared by users ${ids}; left unchanged`;
+    clears.push({ kind: 'skip', table: 'account', id: accountId, reason });
+  }
+  for (const [userId, all] of [...byUser].sort((a, b) => a[0] - b[0])) {
+    const mine = all.filter((p) => members.get(p.accountId).size === 1);
+    if (mine.length === 0) continue;
     const [keep, ...extras] = mine.sort((a, b) => a.accountId - b.accountId);
     personalOf.set(userId, keep.accountId);
     for (const extra of extras) {
@@ -289,16 +324,26 @@ function planLists(
       }
       continue;
     }
-    // Most bills (subscriptions don't count), then Personal, then lowest id.
+    // Most bills (subscriptions don't count), then Personal, then the row's
+    // current account (so a rerun keeps the same winner), then lowest id. A
+    // Personal still to be created (-u) sorts after every real id, by u, as it
+    // will get a higher id than any existing account.
     const bills = (acc: number) =>
       refs.filter((r) => r.table === 'bill' && r.accountId === acc).length;
-    const isPersonal = (acc: number) => (personal.has(acc) ? 1 : 0);
+    const flag = (yes: boolean) => (yes ? 1 : 0);
+    const idOrder = (acc: number) => (acc < 0 ? [1, -acc] : [0, acc]);
     const winner = pinned.has(row.id)
       ? row.accountId
-      : [...accounts].sort(
-          (a, b) =>
-            bills(b) - bills(a) || isPersonal(b) - isPersonal(a) || a - b,
-        )[0];
+      : [...accounts].sort((a, b) => {
+          const [ia, ib] = [idOrder(a), idOrder(b)];
+          return (
+            bills(b) - bills(a) ||
+            flag(personal.has(b)) - flag(personal.has(a)) ||
+            flag(b === row.accountId) - flag(a === row.accountId) ||
+            ia[0] - ib[0] ||
+            ia[1] - ib[1]
+          );
+        })[0];
     if (row.accountId !== winner) {
       actions.push({
         kind: 'list-account',
@@ -356,10 +401,8 @@ export function totalsOf(
 }
 
 /**
- * Plans, then applies the actions in order. Log lines: `totals` (first line of
- * a new log), one line per applied write (the action, with `newId` for created
- * rows and resolved account ids), and `skipped` lines carrying the action and a
- * reason. Throws if the store throws; rerunning picks up what is left.
+ * Plans, then applies the actions in order, logging as described at the top
+ * of the file. Throws if the store throws; rerunning picks up what is left.
  */
 export async function runMigration(
   store: AccountsStore,
@@ -385,15 +428,17 @@ export async function runMigration(
     skipped.push(action);
     await write({ kind: 'skipped', reason, action });
   };
-  /** Applies one conditional write and logs `entry` or a skip. */
-  const apply = async (action: Action, ok: boolean, entry: object = action) => {
-    if (!ok) {
-      await skip(action, 'conditional write matched no row');
-      return false;
-    }
-    await write(entry);
+  const done = async (action: object) => {
+    await write({ kind: 'applied', action });
     applied++;
-    return true;
+  };
+  /** Logs the intent, runs the conditional write, then logs the outcome. */
+  const conditional = async (action: Action, run: () => Promise<boolean>) => {
+    await write({ kind: 'intent', action });
+    const ok = await run();
+    if (ok) await done(action);
+    else await skip(action, 'conditional write matched no row');
+    return ok;
   };
 
   const created = new Map<number, number>();
@@ -412,58 +457,59 @@ export async function runMigration(
       }
       switch (a.kind) {
         case 'dedupe-move': {
-          const ok =
+          const ok = await conditional(a, () =>
             a.table === 'bill' || a.table === 'subscription'
-              ? await store.setRefAccount(a.table, a.id, a.from, a.to)
-              : await store.setListAccount(a.table, a.id, a.from, a.to);
-          if (!(await apply(a, ok))) extrasNotEmptied.add(a.from);
+              ? store.setRefAccount(a.table, a.id, a.from, a.to)
+              : store.setListAccount(a.table, a.id, a.from, a.to),
+          );
+          if (!ok) extrasNotEmptied.add(a.from);
           break;
         }
         case 'dedupe-personal':
           if (extrasNotEmptied.has(a.extra))
             await skip(a, 'a row could not be moved out of it');
-          else await apply(a, await store.clearPersonal(a.extra, a.name));
+          else await conditional(a, () => store.clearPersonal(a.extra, a.name));
           break;
         case 'personal': {
           const newId = await store.createPersonal(a.userId);
           created.set(-a.userId, newId);
-          await apply(a, true, { ...a, newId });
+          await done({ ...a, newId });
           break;
         }
         case 'ref-account':
-          await apply(a, await store.setRefAccount(a.table, a.id, null, a.to));
+          await conditional(a, () =>
+            store.setRefAccount(a.table, a.id, null, a.to),
+          );
           break;
         case 'list-account':
-          await apply(
-            a,
-            await store.setListAccount(a.table, a.id, a.from, a.to),
+          await conditional(a, () =>
+            store.setListAccount(a.table, a.id, a.from, a.to),
           );
           break;
         case 'copy': {
           const source = rows[a.table].find((r) => r.id === a.sourceId);
+          if (!source) throw new Error(`${a.table} ${a.sourceId} not found`);
           const newId = await store.insertListCopy(a.table, source, a.to);
-          await apply(a, true, { ...a, newId });
-          // One log line per repoint, so a rollback can restore each one.
+          await done({ ...a, newId });
+          // One intent and outcome per repoint, so a rollback can restore each.
           const field = a.table === 'shop' ? 'shopId' : 'categoryId';
           for (const r of a.refs) {
-            const ok = await store.repoint(
-              r.table,
-              r.id,
+            const repoint: Action = {
+              kind: 'repoint',
+              ...r,
               field,
-              a.sourceId,
-              newId,
-            );
-            await apply(
-              { kind: 'repoint', ...r, field, from: a.sourceId, to: newId },
-              ok,
+              from: a.sourceId,
+              to: newId,
+            };
+            await conditional(repoint, () =>
+              store.repoint(r.table, r.id, field, a.sourceId, newId),
             );
           }
           break;
         }
         case 'repoint':
-          await apply(
-            a,
-            await store.repoint(a.table, a.id, a.field, a.from, a.to),
+          await conditional(a, () =>
+            store.repoint(a.table, a.id, a.field, a.from, a.to),
           );
           break;
         case 'skip':
