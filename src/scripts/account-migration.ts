@@ -11,7 +11,7 @@
  * - The run re-plans from the current data, so rerunning after an interruption
  *   only does what is left.
  *
- * Log lines (JSONL, one object per line; BE4b's verify and rollback read them):
+ * Log lines (JSONL, one object per line; `verify` and `rollback` read them):
  * - `{ kind: 'totals', perUser: { [userId]: { bills, sum } } }`: first line of
  *   a new log, read before any write (`totalsOf`).
  * - `{ kind: 'intent', action }`: written and fsynced BEFORE each conditional
@@ -29,8 +29,8 @@
  *
  * Pure over an injected `AccountsStore`, so it can be tested without MySQL.
  */
-import { mkdir, open, stat } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { mkdir, open, readFile, stat } from 'node:fs/promises';
+import { basename, dirname } from 'node:path';
 
 export type Table = 'shop' | 'category';
 export type RefTable = 'bill' | 'subscription';
@@ -67,17 +67,19 @@ export interface AccountsStore {
    * `DUPLICATE_PERSONAL_NAME`, only while it is personal and named `expectedName`.
    */
   clearPersonal(accountId: number, expectedName: string): Promise<boolean>;
+  /** Undoes `clearPersonal`, only while the account is a non-personal duplicate. */
+  restorePersonal(accountId: number, name: string): Promise<boolean>;
   setRefAccount(
     table: RefTable,
     id: number,
     expected: number | null,
-    accountId: number,
+    accountId: number | null,
   ): Promise<boolean>;
   setListAccount(
     table: Table,
     id: number,
     expected: number | null,
-    accountId: number,
+    accountId: number | null,
   ): Promise<boolean>;
   insertListCopy(
     table: Table,
@@ -386,11 +388,11 @@ function planLists(
   return { actions, pins };
 }
 
+type Totals = Record<string, { bills: number; sum: number }>;
+
 /** Bill count and price sum per user, the sum rounded to cents. */
-export function totalsOf(
-  bills: RefRow[],
-): Record<string, { bills: number; sum: number }> {
-  const perUser: Record<string, { bills: number; sum: number }> = {};
+export function totalsOf(bills: RefRow[]): Totals {
+  const perUser: Totals = {};
   for (const b of bills) {
     const t = (perUser[b.userId] ??= { bills: 0, sum: 0 });
     t.bills++;
@@ -521,4 +523,196 @@ export async function runMigration(
     await log.close();
   }
   return { applied, skipped };
+}
+
+type LogLine = { kind: string; perUser?: Totals; action?: Action };
+
+/** Log files oldest first, by file name (`accounts-<timestamp>.jsonl`). */
+const oldestFirst = (files: string[]) =>
+  [...files].sort((a, b) => (basename(a) < basename(b) ? -1 : 1));
+
+/** Parses a log; a torn last line (crash mid-write) is ignored. */
+async function readLog(file: string): Promise<LogLine[]> {
+  const lines = (await readFile(file, 'utf8')).split('\n').filter((l) => l);
+  return lines.flatMap((line, i) => {
+    try {
+      return [JSON.parse(line) as LogLine];
+    } catch (e) {
+      if (i === lines.length - 1) return [];
+      throw new Error(`${file} line ${i + 1}: ${(e as Error).message}`);
+    }
+  });
+}
+
+/**
+ * Checks the migrated data: every row has an account, bills and subscriptions
+ * use shops and categories from their own account, every user has exactly one
+ * Personal account, and per-user bill totals equal the earliest `totals` line.
+ */
+export async function verify(
+  store: AccountsStore,
+  logFiles: string[],
+): Promise<{ ok: boolean; problems: string[] }> {
+  const problems: string[] = [];
+  const rows = await load(store);
+  for (const table of [...REF_TABLES, ...LIST_TABLES]) {
+    for (const r of rows[table]) {
+      if (r.accountId == null) problems.push(`${table} ${r.id} has no account`);
+    }
+  }
+  const accountOf = {
+    shop: new Map(rows.shop.map((r) => [r.id, r.accountId])),
+    category: new Map(rows.category.map((r) => [r.id, r.accountId])),
+  };
+  for (const table of REF_TABLES) {
+    for (const r of rows[table]) {
+      for (const list of LIST_TABLES) {
+        const id = list === 'shop' ? r.shopId : r.categoryId;
+        const acc = accountOf[list].get(id);
+        if (id == null || r.accountId == null || acc === r.accountId) continue;
+        problems.push(
+          `${table} ${r.id} is in account ${r.accountId} but its ${list} ${id} is in account ${acc}`,
+        );
+      }
+    }
+  }
+
+  const personals = new Map<number, Set<number>>();
+  for (const p of await store.personalAccounts()) {
+    personals.set(
+      p.userId,
+      (personals.get(p.userId) ?? new Set()).add(p.accountId),
+    );
+  }
+  for (const u of [...(await store.users())].sort((a, b) => a.id - b.id)) {
+    const ids = [...(personals.get(u.id) ?? [])].sort((a, b) => a - b);
+    if (ids.length === 1) continue;
+    const list = ids.length ? ` (${ids.join(', ')})` : '';
+    problems.push(`user ${u.id} has ${ids.length} Personal accounts${list}`);
+  }
+
+  let before: Totals | undefined;
+  for (const file of oldestFirst(logFiles)) {
+    before = (await readLog(file)).find((l) => l.kind === 'totals')?.perUser;
+    if (before) break;
+  }
+  if (!before) {
+    problems.push(
+      'no totals line in the logs, so bill totals were not compared',
+    );
+  } else {
+    const now = totalsOf(rows.bill);
+    const none = { bills: 0, sum: 0 };
+    for (const user of new Set([...Object.keys(before), ...Object.keys(now)])) {
+      const [b, n] = [before[user] ?? none, now[user] ?? none];
+      if (b.bills === n.bills && b.sum === n.sum) continue;
+      problems.push(
+        `user ${user}: ${b.bills} bills totalling ${b.sum} at the first run, now ${n.bills} totalling ${n.sum}`,
+      );
+    }
+  }
+  return { ok: problems.length === 0, problems };
+}
+
+/**
+ * Undoes every `intent` in the logs, newest file first and each file from the
+ * end. An intent is restored only where the current value still equals its
+ * new value, so rows changed since (or writes that never happened) are
+ * skipped. Created Personal accounts and copies are kept.
+ */
+export async function rollback(
+  store: AccountsStore,
+  logFiles: string[],
+): Promise<{ restored: number; skipped: number }> {
+  let restored = 0;
+  let skipped = 0;
+  for (const file of oldestFirst(logFiles).reverse()) {
+    for (const line of (await readLog(file)).reverse()) {
+      if (line.kind !== 'intent') continue;
+      if (await undo(store, line.action)) restored++;
+      else skipped++;
+    }
+  }
+  return { restored, skipped };
+}
+
+function undo(store: AccountsStore, a: Action): Promise<boolean> {
+  switch (a.kind) {
+    case 'dedupe-move':
+      return a.table === 'bill' || a.table === 'subscription'
+        ? store.setRefAccount(a.table, a.id, a.to, a.from)
+        : store.setListAccount(a.table, a.id, a.to, a.from);
+    case 'dedupe-personal':
+      return store.restorePersonal(a.extra, a.name);
+    case 'ref-account':
+      return store.setRefAccount(a.table, a.id, a.to, null);
+    case 'list-account':
+      return store.setListAccount(a.table, a.id, a.to, a.from);
+    case 'repoint':
+      return store.repoint(a.table, a.id, a.field, a.to, a.from);
+    default:
+      throw new Error(`Unexpected intent: ${a.kind}`);
+  }
+}
+
+/** An account id for people; a placeholder `-u` is user u's new Personal. */
+export const accountLabel = (id: number) =>
+  id < 0 ? `the new Personal of user ${-id}` : `account ${id}`;
+
+/**
+ * Same-name shops and categories (trimmed, case-insensitive) that end up in
+ * one account after the plan, where the plan moved or copied at least one.
+ * `lists` is the data the plan was made from.
+ */
+export function plannedDuplicates(
+  lists: Record<Table, ListRow[]>,
+  actions: Action[],
+): string[] {
+  const out: string[] = [];
+  for (const table of LIST_TABLES) {
+    type Entry = {
+      label: string;
+      name: string;
+      accountId: number | null;
+      changed: boolean;
+    };
+    const entries: Entry[] = lists[table].map((r) => ({
+      label: `#${r.id}`,
+      name: r.name,
+      accountId: r.accountId,
+      changed: false,
+    }));
+    const byId = new Map(lists[table].map((r, i) => [r.id, entries[i]]));
+    for (const a of actions) {
+      if (!('table' in a) || a.table !== table) continue;
+      if (a.kind === 'list-account' || a.kind === 'dedupe-move') {
+        Object.assign(byId.get(a.id), { accountId: a.to, changed: true });
+      } else if (a.kind === 'copy') {
+        const name = byId.get(a.sourceId).name;
+        entries.push({
+          label: `copy of #${a.sourceId}`,
+          name,
+          accountId: a.to,
+          changed: true,
+        });
+      }
+    }
+    const groups = new Map<string, Entry[]>();
+    for (const e of entries) {
+      if (e.accountId == null) continue;
+      const key = `${e.accountId}|${e.name.trim().toLowerCase()}`;
+      groups.set(key, [...(groups.get(key) ?? []), e]);
+    }
+    for (const g of groups.values()) {
+      if (g.length < 2 || !g.some((e) => e.changed)) continue;
+      const acc = g[0].accountId;
+      const where = accountLabel(acc);
+      out.push(
+        `${table} "${g[0].name}" in ${where}: ${g
+          .map((e) => e.label)
+          .join(', ')}`,
+      );
+    }
+  }
+  return out;
 }

@@ -22,7 +22,8 @@
     "migration:run": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:run -d src/data-source.ts",
     "migration:revert": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:revert -d src/data-source.ts",
     "migration:generate": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:generate -d src/data-source.ts",
-    "migrate:photos": "ts-node -r tsconfig-paths/register src/scripts/migrate-photos.ts"
+    "migrate:photos": "ts-node -r tsconfig-paths/register src/scripts/migrate-photos.ts",
+    "migrate:accounts": "ts-node -r tsconfig-paths/register src/scripts/migrate-accounts.ts"
   },
   "dependencies": {
     "@nestjs/common": "^9.0.0",

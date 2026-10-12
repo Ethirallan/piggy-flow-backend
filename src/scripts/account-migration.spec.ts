@@ -8,8 +8,11 @@ import {
   RefTable,
   Table,
   UserRow,
+  plannedDuplicates,
   planMigration,
+  rollback,
   runMigration,
+  verify,
 } from './account-migration';
 
 type Acc = { id: number; name: string; personal: boolean; members: number[] };
@@ -100,11 +103,20 @@ class MemStore implements AccountsStore {
       () => Object.assign(a, { personal: false, name: 'Personal (duplicate)' }),
     );
   }
+  async restorePersonal(accountId: number, name: string) {
+    const a = this.data.accounts.find((x) => x.id === accountId);
+    return this.cond(
+      'restorePersonal',
+      accountId,
+      a && !a.personal && a.name === 'Personal (duplicate)',
+      () => Object.assign(a, { personal: true, name }),
+    );
+  }
   async setRefAccount(
     table: RefTable,
     id: number,
     expected: number | null,
-    accountId: number,
+    accountId: number | null,
   ) {
     const r = this.data[table].find((x) => x.id === id);
     return this.cond('setRefAccount', id, r?.accountId === expected, () => {
@@ -115,7 +127,7 @@ class MemStore implements AccountsStore {
     table: Table,
     id: number,
     expected: number | null,
-    accountId: number,
+    accountId: number | null,
   ) {
     const r = this.data[table].find((x) => x.id === id);
     return this.cond('setListAccount', id, r?.accountId === expected, () => {
@@ -776,6 +788,154 @@ describe('account migration: shops and categories', () => {
         to: 1,
         refs: [{ table: 'bill', id: 1 }],
       },
+    ]);
+  });
+});
+
+describe('account migration: verify, rollback and duplicates', () => {
+  const lidl = (id: number, accountId: number | null, userId = 1): ListRow => ({
+    id,
+    userId,
+    accountId,
+    name: 'Lidl',
+  });
+  const household = (): Partial<Data> => ({
+    users: [{ id: 1 }, { id: 2 }],
+    accounts: [
+      { id: 1, name: 'Personal', personal: true, members: [1] },
+      { id: 2, name: 'Household', personal: false, members: [1, 2] },
+    ],
+    bill: [bill(1, 1, null, 1), bill(2, 1, 1, 1), bill(3, 2, 2, 1, 7.5)],
+    subscription: [
+      { id: 1, userId: 2, accountId: null, shopId: null, categoryId: null },
+    ],
+    shop: [lidl(1, null)],
+  });
+
+  it('passes verify after a run', async () => {
+    const store = new MemStore(household());
+    await runMigration(store, logFile);
+    expect(await verify(store, [logFile])).toEqual({ ok: true, problems: [] });
+  });
+
+  it('reports each kind of problem', async () => {
+    const store = new MemStore(household());
+    await runMigration(store, logFile);
+    store.data.subscription[0].accountId = null;
+    store.data.bill[2].accountId = 1; // its shop copy is in Household
+    store.data.accounts.push({
+      id: 9,
+      name: 'Personal',
+      personal: true,
+      members: [1],
+    });
+    store.data.users.push({ id: 5 });
+    store.data.bill.push(bill(4, 2, 2, null, 3));
+    const shopOf3 = store.data.bill[2].shopId;
+    expect((await verify(store, [logFile])).problems).toEqual([
+      'subscription 1 has no account',
+      `bill 3 is in account 1 but its shop ${shopOf3} is in account 2`,
+      'user 1 has 2 Personal accounts (1, 9)',
+      'user 5 has 0 Personal accounts',
+      'user 2: 1 bills totalling 7.5 at the first run, now 2 totalling 10.5',
+    ]);
+  });
+
+  it('compares with the earliest totals line and fails without one', async () => {
+    const dir = path.dirname(logFile);
+    const store = new MemStore({
+      users: [{ id: 1 }],
+      bill: [bill(1, 1, null)],
+    });
+    const first = path.join(dir, 'accounts-2026-01-01.jsonl');
+    const second = path.join(dir, 'accounts-2026-02-01.jsonl');
+    await runMigration(store, first);
+    store.data.bill.push(bill(2, 1, 1));
+    await runMigration(store, second);
+    expect((await verify(store, [second, first])).problems).toEqual([
+      'user 1: 1 bills totalling 10 at the first run, now 2 totalling 20',
+    ]);
+    expect((await verify(store, [])).problems).toEqual([
+      'no totals line in the logs, so bill totals were not compared',
+    ]);
+  });
+
+  it('rolls back every logged write, keeping created accounts and copies', async () => {
+    const store = new MemStore({
+      ...household(),
+      accounts: [
+        { id: 1, name: 'Personal', personal: true, members: [1] },
+        { id: 2, name: 'Household', personal: false, members: [1, 2] },
+        { id: 3, name: 'Old Personal', personal: true, members: [1] },
+      ],
+      category: [{ id: 1, userId: 1, accountId: 3, name: 'Food' }],
+    });
+    const before = copy(store.data);
+    await runMigration(store, logFile);
+    expect(store.data.accounts[2].personal).toBe(false);
+    const res = await rollback(store, [logFile]);
+    expect(res.skipped).toBe(0);
+    expect(res.restored).toBeGreaterThan(0);
+    expect(store.data.bill).toEqual(before.bill);
+    expect(store.data.subscription).toEqual(before.subscription);
+    expect(store.data.category).toEqual(before.category);
+    expect(store.data.shop[0]).toEqual(before.shop[0]);
+    expect(store.data.shop.length).toBeGreaterThan(1); // the copy stays
+    expect(store.data.accounts.slice(0, 3)).toEqual(before.accounts);
+    expect(store.data.accounts.length).toBeGreaterThan(3); // user 2's Personal stays
+  });
+
+  it('skips rows changed since the run and restores the rest', async () => {
+    const store = new MemStore(household());
+    await runMigration(store, logFile);
+    store.data.bill[0].accountId = 2; // the user moved it
+    const res = await rollback(store, [logFile]);
+    expect(res.skipped).toBe(1);
+    expect(store.data.bill[0].accountId).toBe(2);
+    expect(store.data.subscription[0].accountId).toBeNull();
+    expect(await rollback(store, [logFile])).toEqual({
+      restored: 0,
+      skipped: res.restored + res.skipped,
+    });
+  });
+
+  it('undoes several logs newest first, also from intents without an outcome', async () => {
+    const dir = path.dirname(logFile);
+    const first = path.join(dir, 'accounts-1.jsonl');
+    const second = path.join(dir, 'accounts-2.jsonl');
+    const store = new MemStore({
+      users: [{ id: 1 }],
+      accounts: [{ id: 1, name: 'Personal', personal: true, members: [1] }],
+      bill: [bill(1, 1, null)],
+      shop: [lidl(1, null)],
+    });
+    store.onWrite = (method) =>
+      method === 'setListAccount' ? 'commit-throw' : undefined;
+    await expect(runMigration(store, first)).rejects.toThrow(/after commit/);
+    expect(store.data.shop[0].accountId).toBe(1);
+    store.onWrite = undefined;
+    store.data.bill.push(bill(2, 1, null));
+    await runMigration(store, second);
+    expect(await rollback(store, [first, second])).toEqual({
+      restored: 3,
+      skipped: 0,
+    });
+    expect(store.data.bill.map((b) => b.accountId)).toEqual([null, null]);
+    expect(store.data.shop[0].accountId).toBeNull();
+  });
+
+  it('lists same-name shops the plan puts in one account', async () => {
+    const store = new MemStore({
+      ...household(),
+      subscription: [
+        { id: 1, userId: 2, accountId: 2, shopId: 2, categoryId: null },
+      ],
+      shop: [lidl(1, null), lidl(2, 2, 2)],
+    });
+    const actions = await planMigration(store);
+    const lists = { shop: await store.lists('shop'), category: [] };
+    expect(plannedDuplicates(lists, actions)).toEqual([
+      'shop "Lidl" in account 2: #2, copy of #1',
     ]);
   });
 });
