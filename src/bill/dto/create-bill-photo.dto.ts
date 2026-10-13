@@ -1,8 +1,8 @@
-import { CreateBillDto } from "./create-bill.dto";
+import { Bill } from "../entities/bill.entity";
 
 export class CreateBillPhotoDto {
   id: number;
-  bill: CreateBillDto;
+  bill: Pick<Bill, 'id'>;
   blurhash: string;
   name: string;
   photo: string;

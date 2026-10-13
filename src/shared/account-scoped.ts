@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import type { AccountService } from 'src/account/account.service';
-import { Repository } from 'typeorm';
+import type { Account } from 'src/account/entities/account.entity';
+import { FindOptionsWhere, Repository } from 'typeorm';
 
 /** The `?account=` query value as a number, or undefined when absent. Anything else is 400. */
 export function parseAccountQuery(account: string | undefined): number | undefined {
@@ -10,14 +11,14 @@ export function parseAccountQuery(account: string | undefined): number | undefin
 }
 
 /** The row, if the user belongs to its account. A missing row or one without an account is 404. */
-export async function loadAsMember<T extends { account?: { id: number } | null }>(
+export async function loadAsMember<T extends { id: number; account?: { id: number } | null }>(
   repo: Pick<Repository<T>, 'findOne'>,
   id: number,
   userId: number | undefined,
   accounts: Pick<AccountService, 'assertMember'>,
 ): Promise<T> {
   if (userId == null) throw new NotFoundException();
-  const row = (await repo.findOne({ where: { id } as any, relations: ['account'] })) as T | null;
+  const row = await repo.findOne({ where: { id } as FindOptionsWhere<T>, relations: ['account'] });
   if (!row?.account) throw new NotFoundException();
   await accounts.assertMember(row.account.id, userId);
   return row;
@@ -39,13 +40,14 @@ export async function deleteOrInUse<R>(remove: () => Promise<R>): Promise<R> {
   try {
     return await remove();
   } catch (e) {
-    if ((e as any)?.driverError?.errno === 1451 || (e as any)?.errno === 1451) throw new ConflictException('In use');
+    const error = e as { errno?: number; driverError?: { errno?: number } } | null;
+    if (error?.driverError?.errno === 1451 || error?.errno === 1451) throw new ConflictException('In use');
     throw e;
   }
 }
 
 /** The rows of one account the user belongs to, or of all their accounts, each with its account. */
-export async function listInAccounts<T extends { account?: unknown }>(
+export async function listInAccounts<T extends { account?: Account | null }>(
   repo: Pick<Repository<T>, 'find'>,
   accounts: Pick<AccountService, 'assertMember'>,
   userId: number | undefined,
@@ -53,8 +55,8 @@ export async function listInAccounts<T extends { account?: unknown }>(
 ): Promise<T[]> {
   if (accountId !== undefined) {
     await accounts.assertMember(accountId, userId);
-    return repo.find({ where: { account: { id: accountId } } as any, relations: ['account'] });
+    return repo.find({ where: { account: { id: accountId } } as FindOptionsWhere<T>, relations: ['account'] });
   }
   if (userId == null) throw new NotFoundException();
-  return repo.find({ where: { account: { users: { id: userId } } } as any, relations: ['account'] });
+  return repo.find({ where: { account: { users: { id: userId } } } as FindOptionsWhere<T>, relations: ['account'] });
 }

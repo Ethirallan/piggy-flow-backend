@@ -27,6 +27,9 @@ export class CategoryService {
     const userId = createCategoryDto.user?.id;
     if (userId == null) throw new NotFoundException();
     await assertRequiredAccountRef(createCategoryDto.account, userId, this.accounts);
+    // The name alone clashes, whatever the emoji, as in copy.
+    const existing = await this.categoryRepository.find({ where: { account: { id: createCategoryDto.account.id } } });
+    if (hasNameClash(existing, createCategoryDto.name)) throw new ConflictException('Already exists');
     const saved = await this.categoryRepository.save({
       name: createCategoryDto.name,
       emoji: createCategoryDto.emoji,

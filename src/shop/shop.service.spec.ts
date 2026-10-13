@@ -37,6 +37,24 @@ describe('ShopService', () => {
   const shopIn = (accountId = 3) => repo.findOne.mockResolvedValue({ id: 5, name: 'Lidl', account: { id: accountId } });
 
   describe('create', () => {
+    beforeEach(() => repo.find.mockResolvedValue([]));
+
+    it.each([['Lidl'], ['lidl'], ['  LIDL  ']])('gives 409 Already exists when the account has %j, and saves nothing', async (name) => {
+      repo.find.mockResolvedValue([{ id: 40, name }]);
+      await expect(service.create({ name: ' Lidl', user: { id: 7 }, account: { id: 9 } } as any)).rejects.toMatchObject({
+        status: 409,
+        message: 'Already exists',
+      });
+      expect(repo.find).toHaveBeenCalledWith({ where: { account: { id: 9 } } });
+      expect(repo.save).not.toHaveBeenCalled();
+    });
+
+    it('checks membership before looking at the account\'s names', async () => {
+      notMember();
+      await expect(service.create({ name: 'Lidl', user: { id: 7 }, account: { id: 9 } } as any)).rejects.toBeInstanceOf(NotFoundException);
+      expect(repo.find).not.toHaveBeenCalled();
+    });
+
     it.each([[undefined], [null]])('gives 400 Invalid account. without an account (%j) and saves nothing', async (account) => {
       await expect(service.create({ name: 'x', user: { id: 7 }, account } as any)).rejects.toMatchObject({
         status: 400,

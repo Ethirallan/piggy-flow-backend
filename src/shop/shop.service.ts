@@ -27,6 +27,8 @@ export class ShopService {
     const userId = createShopDto.user?.id;
     if (userId == null) throw new NotFoundException();
     await assertRequiredAccountRef(createShopDto.account, userId, this.accounts);
+    const existing = await this.shopRepository.find({ where: { account: { id: createShopDto.account.id } } });
+    if (hasNameClash(existing, createShopDto.name)) throw new ConflictException('Already exists');
     const saved = await this.shopRepository.save({ name: createShopDto.name, account: createShopDto.account });
     return this.shopRepository.findOne({ where: { id: saved.id }, relations: ['account'] });
   }

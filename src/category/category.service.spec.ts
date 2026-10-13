@@ -38,6 +38,24 @@ describe('CategoryService', () => {
     repo.findOne.mockResolvedValue({ id: 5, name: 'Food', emoji: '🍕', account: { id: accountId } });
 
   describe('create', () => {
+    beforeEach(() => repo.find.mockResolvedValue([]));
+
+    it.each([['Food'], ['food'], ['  FOOD  ']])('gives 409 Already exists when the account has %j, whatever its emoji', async (name) => {
+      repo.find.mockResolvedValue([{ id: 40, name, emoji: '🥦' }]);
+      await expect(service.create({ name: ' Food', emoji: '🍕', user: { id: 7 }, account: { id: 9 } } as any)).rejects.toMatchObject({
+        status: 409,
+        message: 'Already exists',
+      });
+      expect(repo.find).toHaveBeenCalledWith({ where: { account: { id: 9 } } });
+      expect(repo.save).not.toHaveBeenCalled();
+    });
+
+    it('checks membership before looking at the account\'s names', async () => {
+      notMember();
+      await expect(service.create({ name: 'Food', emoji: '🍕', user: { id: 7 }, account: { id: 9 } } as any)).rejects.toBeInstanceOf(NotFoundException);
+      expect(repo.find).not.toHaveBeenCalled();
+    });
+
     it.each([[undefined], [null]])('gives 400 Invalid account. without an account (%j) and saves nothing', async (account) => {
       await expect(service.create({ name: 'x', emoji: '🍕', user: { id: 7 }, account } as any)).rejects.toMatchObject({
         status: 400,

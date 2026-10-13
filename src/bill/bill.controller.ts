@@ -139,7 +139,7 @@ export class BillController {
           console.warn(`Blurhash failed for ${file.filename}:`, e);
           newPhoto.blurhash = '000000';
         }
-        newPhoto.bill = bill as any;
+        newPhoto.bill = { id: bill.id };
         await this.billService.addPhoto(newPhoto);
       }
     } catch (e) {
