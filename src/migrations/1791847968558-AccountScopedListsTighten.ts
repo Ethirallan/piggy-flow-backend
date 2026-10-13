@@ -18,14 +18,7 @@ export class AccountScopedListsTighten1791847968558
         );
       }
     }
-    await queryRunner.query(
-      `ALTER TABLE \`category\` DROP FOREIGN KEY \`FK_32b856438dffdc269fa84434d9f\``,
-    );
-    await queryRunner.query(
-      `ALTER TABLE \`shop\` DROP FOREIGN KEY \`FK_e8f0a5cb5967931a347c31619b6\``,
-    );
-    await queryRunner.query(`ALTER TABLE \`category\` DROP COLUMN \`userId\``);
-    await queryRunner.query(`ALTER TABLE \`shop\` DROP COLUMN \`userId\``);
+    // Reversible changes first: tighten the four accountId columns.
     await queryRunner.query(
       `ALTER TABLE \`category\` DROP FOREIGN KEY \`FK_9a3f904e7ac2ebf737fbabcc75a\``,
     );
@@ -62,12 +55,30 @@ export class AccountScopedListsTighten1791847968558
     await queryRunner.query(
       `ALTER TABLE \`subscription\` ADD CONSTRAINT \`FK_8e111baa45a259873197531d38b\` FOREIGN KEY (\`accountId\`) REFERENCES \`account\`(\`id\`) ON DELETE NO ACTION ON UPDATE NO ACTION`,
     );
+    // Irreversible last: drop the creator columns (their data is lost).
+    await queryRunner.query(
+      `ALTER TABLE \`category\` DROP FOREIGN KEY \`FK_32b856438dffdc269fa84434d9f\``,
+    );
+    await queryRunner.query(
+      `ALTER TABLE \`shop\` DROP FOREIGN KEY \`FK_e8f0a5cb5967931a347c31619b6\``,
+    );
+    await queryRunner.query(`ALTER TABLE \`category\` DROP COLUMN \`userId\``);
+    await queryRunner.query(`ALTER TABLE \`shop\` DROP COLUMN \`userId\``);
   }
 
   // Restores the old shape only: accountId becomes nullable again and
   // shop.userId / category.userId come back as empty nullable columns.
   // It does NOT restore their data; the mysqldump taken before M2 is the rollback.
   public async down(queryRunner: QueryRunner): Promise<void> {
+    // Mirror of up(): bring the creator columns back first, then loosen accountId.
+    await queryRunner.query(`ALTER TABLE \`shop\` ADD \`userId\` int NULL`);
+    await queryRunner.query(`ALTER TABLE \`category\` ADD \`userId\` int NULL`);
+    await queryRunner.query(
+      `ALTER TABLE \`shop\` ADD CONSTRAINT \`FK_e8f0a5cb5967931a347c31619b6\` FOREIGN KEY (\`userId\`) REFERENCES \`user\`(\`id\`) ON DELETE NO ACTION ON UPDATE NO ACTION`,
+    );
+    await queryRunner.query(
+      `ALTER TABLE \`category\` ADD CONSTRAINT \`FK_32b856438dffdc269fa84434d9f\` FOREIGN KEY (\`userId\`) REFERENCES \`user\`(\`id\`) ON DELETE NO ACTION ON UPDATE NO ACTION`,
+    );
     await queryRunner.query(
       `ALTER TABLE \`subscription\` DROP FOREIGN KEY \`FK_8e111baa45a259873197531d38b\``,
     );
@@ -103,14 +114,6 @@ export class AccountScopedListsTighten1791847968558
     );
     await queryRunner.query(
       `ALTER TABLE \`category\` ADD CONSTRAINT \`FK_9a3f904e7ac2ebf737fbabcc75a\` FOREIGN KEY (\`accountId\`) REFERENCES \`account\`(\`id\`) ON DELETE NO ACTION ON UPDATE NO ACTION`,
-    );
-    await queryRunner.query(`ALTER TABLE \`shop\` ADD \`userId\` int NULL`);
-    await queryRunner.query(`ALTER TABLE \`category\` ADD \`userId\` int NULL`);
-    await queryRunner.query(
-      `ALTER TABLE \`shop\` ADD CONSTRAINT \`FK_e8f0a5cb5967931a347c31619b6\` FOREIGN KEY (\`userId\`) REFERENCES \`user\`(\`id\`) ON DELETE NO ACTION ON UPDATE NO ACTION`,
-    );
-    await queryRunner.query(
-      `ALTER TABLE \`category\` ADD CONSTRAINT \`FK_32b856438dffdc269fa84434d9f\` FOREIGN KEY (\`userId\`) REFERENCES \`user\`(\`id\`) ON DELETE NO ACTION ON UPDATE NO ACTION`,
     );
   }
 }

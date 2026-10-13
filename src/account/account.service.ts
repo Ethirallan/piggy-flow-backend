@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { deleteOrInUse } from 'src/shared/account-scoped';
 import { Repository } from 'typeorm';
 import { CreateAccountDto } from './dto/create-account.dto';
 import { UpdateAccountDto } from './dto/update-account.dto';
@@ -50,6 +51,7 @@ export class AccountService {
   async removeMember(id: number, userId: number | undefined) {
     const account = await this.assertMember(id, userId);
     if (account.personal) throw new BadRequestException("The Personal account can't be deleted.");
-    return this.accountRepository.delete(id);
+    // Bills cascade; subscriptions, shops and categories block the delete (409).
+    return deleteOrInUse(() => this.accountRepository.delete(id));
   }
 }

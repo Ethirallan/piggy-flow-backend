@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
-import { AccountService } from 'src/account/account.service';
+import type { AccountService } from 'src/account/account.service';
 import { Repository } from 'typeorm';
 
 /** The `?account=` query value as a number, or undefined when absent. Anything else is 400. */

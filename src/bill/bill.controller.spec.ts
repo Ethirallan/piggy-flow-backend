@@ -362,6 +362,31 @@ describe('BillController (HTTP)', () => {
       expect(uploaded()).toEqual([]);
     });
 
+    it.each([[{ price: 1 }], [{ price: 1, account: null }]])(
+      'gives 400 Invalid account. for %j through the real check, writes nothing and removes the uploads',
+      async (body) => {
+        // The real assertNewBill, with stand-ins for its dependencies.
+        const assertMember = jest.fn();
+        const findOne = jest.fn();
+        service.assertNewBill.mockImplementation((dto, userId) =>
+          BillService.prototype.assertNewBill.call(
+            { accountService: { assertMember }, dataSource: { manager: { findOne } } },
+            dto,
+            userId,
+          ),
+        );
+        const res = await request(app.getHttpServer())
+          .post('/bill')
+          .field('body', JSON.stringify(body))
+          .attach('files', Buffer.from('img'), 'IMG_1.JPG');
+        expect(res.status).toBe(400);
+        expect(res.body.message).toBe('Invalid account.');
+        expect(assertMember).not.toHaveBeenCalled();
+        expect(service.create).not.toHaveBeenCalled();
+        expect(uploaded()).toEqual([]);
+      },
+    );
+
     it('gives 404 without a request user and removes the uploads', async () => {
       user = undefined;
       const res = await request(app.getHttpServer())

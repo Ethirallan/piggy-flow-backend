@@ -84,6 +84,18 @@ describe('AccountService', () => {
     expect(repo.delete).not.toHaveBeenCalled();
   });
 
+  it('removeMember gives 409 In use when the account still has subscriptions, shops or categories (FK 1451)', async () => {
+    repo.findOne.mockResolvedValue({ id: 3, users: [{ id: 7 }] });
+    repo.delete.mockRejectedValue({ driverError: { errno: 1451 } });
+    await expect(service.removeMember(3, 7)).rejects.toMatchObject({ status: 409, message: 'In use' });
+  });
+
+  it('removeMember rethrows other delete errors', async () => {
+    repo.findOne.mockResolvedValue({ id: 3, users: [{ id: 7 }] });
+    repo.delete.mockRejectedValue(new Error('boom'));
+    await expect(service.removeMember(3, 7)).rejects.toThrow('boom');
+  });
+
   it('removeMember deletes for a member', async () => {
     repo.findOne.mockResolvedValue({ id: 3, users: [{ id: 7 }] });
     repo.delete.mockResolvedValue({ affected: 1 });
