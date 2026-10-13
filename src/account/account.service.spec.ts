@@ -2,16 +2,22 @@ import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { AccountService } from './account.service';
+import { Bill } from 'src/bill/entities/bill.entity';
 import { Account } from './entities/account.entity';
 
 describe('AccountService', () => {
   let service: AccountService;
   const repo = { findOne: jest.fn(), update: jest.fn(), delete: jest.fn(), createQueryBuilder: jest.fn() };
+  const bills = { count: jest.fn() };
 
   beforeEach(async () => {
     jest.resetAllMocks();
     const module: TestingModule = await Test.createTestingModule({
-      providers: [AccountService, { provide: getRepositoryToken(Account), useValue: repo }],
+      providers: [
+        AccountService,
+        { provide: getRepositoryToken(Account), useValue: repo },
+        { provide: getRepositoryToken(Bill), useValue: bills },
+      ],
     }).compile();
     service = module.get<AccountService>(AccountService);
   });
@@ -88,6 +94,14 @@ describe('AccountService', () => {
     repo.findOne.mockResolvedValue({ id: 3, users: [{ id: 7 }] });
     repo.delete.mockRejectedValue({ driverError: { errno: 1451 } });
     await expect(service.removeMember(3, 7)).rejects.toMatchObject({ status: 409, message: 'In use' });
+  });
+
+  it('removeMember gives 409 In use when the account still has bills, and deletes nothing', async () => {
+    repo.findOne.mockResolvedValue({ id: 3, users: [{ id: 7 }] });
+    bills.count.mockResolvedValue(2);
+    await expect(service.removeMember(3, 7)).rejects.toMatchObject({ status: 409, message: 'In use' });
+    expect(bills.count).toHaveBeenCalledWith({ where: { account: { id: 3 } } });
+    expect(repo.delete).not.toHaveBeenCalled();
   });
 
   it('removeMember rethrows other delete errors', async () => {

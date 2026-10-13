@@ -1,5 +1,6 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { Bill } from 'src/bill/entities/bill.entity';
 import { deleteOrInUse } from 'src/shared/account-scoped';
 import { Repository } from 'typeorm';
 import { CreateAccountDto } from './dto/create-account.dto';
@@ -11,6 +12,8 @@ export class AccountService {
   constructor(
     @InjectRepository(Account)
     private accountRepository: Repository<Account>,
+    @InjectRepository(Bill)
+    private billRepository: Repository<Bill>,
   ) {}
 
   /** Saves only the name and members, never a client id, `personal` flag or timestamps. */
@@ -51,7 +54,8 @@ export class AccountService {
   async removeMember(id: number, userId: number | undefined) {
     const account = await this.assertMember(id, userId);
     if (account.personal) throw new BadRequestException("The Personal account can't be deleted.");
-    // Bills cascade; subscriptions, shops and categories block the delete (409).
+    // The bills FK cascades, so check them here; subscriptions, shops and categories block through their FKs (409).
+    if ((await this.billRepository.count({ where: { account: { id } } })) > 0) throw new ConflictException('In use');
     return deleteOrInUse(() => this.accountRepository.delete(id));
   }
 }
