@@ -87,6 +87,51 @@ describe('BillService', () => {
       expect(personal.ensurePersonal).not.toHaveBeenCalled();
       expect((bills as any).save).toHaveBeenCalledWith(expect.objectContaining({ account: { id: 9 } }));
     });
+
+    it('creates a new bill for a client id pointing at someone else\'s bill, leaving it unchanged', async () => {
+      // A tiny table that behaves like TypeORM save: an id updates that row, no id inserts.
+      const victim = { id: 99, user: { id: 2 }, account: { id: 20 }, price: 50, comment: 'theirs' };
+      const rows = new Map<number, any>([[99, { ...victim }]]);
+      (bills as any).save = jest.fn(async (row: any) => {
+        if (row.id != null && rows.has(row.id)) return Object.assign(rows.get(row.id), row);
+        const created = { ...row, id: 100 };
+        rows.set(100, created);
+        return created;
+      });
+      const saved = await service.create({
+        id: 99,
+        user: { id: 7 },
+        account: { id: 9 },
+        price: 1,
+        comment: 'mine',
+        created: '2000-01-01',
+        lastUpdate: '2000-01-01',
+        photos: [{ id: 1, path: 'x.jpg' }],
+      } as any);
+      expect(saved.id).toBe(100);
+      expect(rows.get(99)).toEqual(victim);
+      const row = (bills as any).save.mock.calls[0][0];
+      expect(row).not.toHaveProperty('id');
+      expect(row).not.toHaveProperty('created');
+      expect(row).not.toHaveProperty('lastUpdate');
+      expect(row).not.toHaveProperty('photos');
+      expect(row).toEqual({ user: { id: 7 }, account: { id: 9 }, price: 1, comment: 'mine' });
+    });
+
+    it('saves every field the subscription cron sets', async () => {
+      const date = new Date();
+      const dto = {
+        user: { id: 7 },
+        account: { id: 5 },
+        shop: { id: 11 },
+        category: { id: 12 },
+        price: 3,
+        comment: 'Netflix',
+        date,
+      };
+      await service.create(dto as any);
+      expect((bills as any).save).toHaveBeenCalledWith(dto);
+    });
   });
 
   describe('getOwnedBill', () => {

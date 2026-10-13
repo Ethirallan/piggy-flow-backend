@@ -12,8 +12,9 @@ export class AccountService {
     private accountRepository: Repository<Account>,
   ) {}
 
+  /** Saves only the name and members, never a client id, `personal` flag or timestamps. */
   create(createAccountDto: CreateAccountDto) {
-    return this.accountRepository.save(createAccountDto);
+    return this.accountRepository.save({ name: createAccountDto.name, users: createAccountDto.users });
   }
 
   async getAccountsByUserId(id: number) {

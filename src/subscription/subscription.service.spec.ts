@@ -224,6 +224,41 @@ describe('SubscriptionService', () => {
     expect(repo.save).toHaveBeenNthCalledWith(3, expect.objectContaining({ account: { id: 3 } }));
   });
 
+  it('createOwned creates a new subscription for a client id pointing at someone else\'s, leaving it unchanged', async () => {
+    accounts.assertMember.mockResolvedValue({});
+    const victim = { id: 99, user: { id: 2 }, account: { id: 20 }, price: 50, name: 'theirs' };
+    const rows = new Map<number, any>([[99, { ...victim }]]);
+    repo.save.mockImplementation(async (row: any) => {
+      if (row.id != null && rows.has(row.id)) return Object.assign(rows.get(row.id), row);
+      const created = { ...row, id: 100 };
+      rows.set(100, created);
+      return created;
+    });
+    const saved = await service.createOwned(7, {
+      id: 99,
+      user: { id: 7 },
+      account: { id: 5 },
+      shop: { id: 1 },
+      category: { id: 2 },
+      chargeDay: 3,
+      price: 1,
+      name: 'mine',
+      created: '2000-01-01',
+      lastUpdate: '2000-01-01',
+    } as any);
+    expect(saved.id).toBe(100);
+    expect(rows.get(99)).toEqual(victim);
+    expect(repo.save.mock.calls[0][0]).toEqual({
+      user: { id: 7 },
+      account: { id: 5 },
+      shop: { id: 1 },
+      category: { id: 2 },
+      chargeDay: 3,
+      price: 1,
+      name: 'mine',
+    });
+  });
+
   describe.each(['77', 77, [], {}])('a bare or malformed account %j', (account) => {
     it('updateOwned gives 400 and writes nothing', async () => {
       repo.findOne.mockResolvedValue(creatorSub);

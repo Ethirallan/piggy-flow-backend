@@ -8,6 +8,7 @@ import { DataSource, In, Repository } from 'typeorm';
 import { AccountService } from 'src/account/account.service';
 import { PersonalAccountService } from 'src/account/personal-account.service';
 import { assertAccountRef } from 'src/shared/account-ref';
+import { pickFields } from 'src/shared/pick-fields';
 import { assertSameList } from 'src/shared/same-list';
 import { CreateBillPhotoDto } from './dto/create-bill-photo.dto';
 import { CreateBillDto } from './dto/create-bill.dto';
@@ -16,8 +17,11 @@ import { Bill } from './entities/bill.entity';
 import { BillPhoto } from './entities/bill_photo.entity';
 import { deletePhotoFiles, encodeImageToBlurhash } from './photo-files';
 
-/** Bill columns a PATCH may change. Everything else in the dto is ignored. */
-const UPDATABLE_FIELDS = [
+/**
+ * Bill columns a client may set, on create or PATCH. Everything else in the
+ * body (id, user, timestamps, photos) is ignored.
+ */
+const CLIENT_FIELDS = [
   'account',
   'date',
   'shop',
@@ -25,6 +29,9 @@ const UPDATABLE_FIELDS = [
   'price',
   'comment',
 ] as const;
+
+/** The fields of a client body a new bill may take. The caller adds the user. */
+export const pickBillFields = (body: unknown) => pickFields<CreateBillDto, (typeof CLIENT_FIELDS)[number]>(body, CLIENT_FIELDS);
 
 @Injectable()
 export class BillService {
@@ -59,12 +66,16 @@ export class BillService {
    * No account (the current web app, or the subscription cron) means the
    * creator's Personal account. Does not check R2: the cron copies a
    * subscription, which was checked when it was saved.
+   *
+   * Only the client fields and the user are saved, never an id: a client id
+   * would make `save` overwrite that bill instead of inserting a new one.
    */
   async create(createBillDto: CreateBillDto) {
-    if (createBillDto.account == null && createBillDto.user?.id != null) {
-      createBillDto.account = await this.personalAccounts.ensurePersonal(createBillDto.user.id);
+    const bill = { ...pickBillFields(createBillDto), user: createBillDto.user };
+    if (bill.account == null && bill.user?.id != null) {
+      bill.account = await this.personalAccounts.ensurePersonal(bill.user.id);
     }
-    return this.billRepository.save(createBillDto);
+    return this.billRepository.save(bill);
   }
 
   async getBillById(id: number) {
@@ -167,7 +178,7 @@ export class BillService {
       }
 
       const fields: Partial<Bill> = {};
-      for (const key of UPDATABLE_FIELDS) {
+      for (const key of CLIENT_FIELDS) {
         if (dto[key] !== undefined) (fields as any)[key] = dto[key];
       }
 

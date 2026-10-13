@@ -16,7 +16,7 @@ import {
   ValidationPipe,
 } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
-import { BillService } from './bill.service';
+import { BillService, pickBillFields } from './bill.service';
 import { CreateBillDto } from './dto/create-bill.dto';
 import { UpdateBillDto } from './dto/update-bill.dto';
 import { CreateBillPhotoDto } from './dto/create-bill-photo.dto';
@@ -118,7 +118,8 @@ export class BillController {
           throw new BadRequestException('Invalid body.');
         }
       }
-      const createBillDto = Object.assign(new CreateBillDto(), data);
+      // Never the client's id, user, timestamps or photos (see pickBillFields).
+      const createBillDto = Object.assign(new CreateBillDto(), pickBillFields(data));
       createBillDto.user = req.user;
       await this.billService.assertNewBill(createBillDto, req.user.id);
       bill = await this.billService.create(createBillDto);

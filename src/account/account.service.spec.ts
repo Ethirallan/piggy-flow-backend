@@ -31,6 +31,12 @@ describe('AccountService', () => {
     await expect(service.assertMember(3, 7)).rejects.toBeInstanceOf(NotFoundException);
   });
 
+  it('create never takes id, personal or timestamps from the dto', async () => {
+    (repo as any).save = jest.fn().mockResolvedValue({ id: 1 });
+    await service.create({ id: 99, name: 'Home', users: [{ id: 7 }], personal: true, created: 'x', lastUpdate: 'x' } as any);
+    expect((repo as any).save).toHaveBeenCalledWith({ name: 'Home', users: [{ id: 7 }] });
+  });
+
   it('updateMember applies only the name for a member', async () => {
     repo.findOne.mockResolvedValue({ id: 3, users: [{ id: 7 }] });
     repo.update.mockResolvedValue({ affected: 1 });

@@ -269,6 +269,41 @@ describe('BillController (HTTP)', () => {
       expect(service.getBillById).toHaveBeenCalledWith(10);
     });
 
+    it.each([
+      ['multipart', true],
+      ['JSON', false],
+    ])('never takes id, ownership or photo fields from a %s body', async (_label, multipart) => {
+      service.create.mockResolvedValue({ id: 16 });
+      service.getBillById.mockResolvedValue({ id: 16 });
+      const body = {
+        id: 99,
+        user: { id: 1 },
+        created: '2000-01-01',
+        lastUpdate: '2000-01-01',
+        photos: [{ id: 3, path: 'theirs.jpg' }],
+        date: '2026-10-01T00:00:00.000Z',
+        price: 2,
+        comment: 'mine',
+        shop: { id: 1 },
+        category: { id: 2 },
+        account: { id: 4 },
+      };
+      const req = request(app.getHttpServer()).post('/bill');
+      const res = await (multipart ? req.field('body', JSON.stringify(body)) : req.send(body));
+      expect(res.status).toBe(201);
+      const expected = {
+        date: body.date,
+        price: 2,
+        comment: 'mine',
+        shop: { id: 1 },
+        category: { id: 2 },
+        account: { id: 4 },
+        user,
+      };
+      expect({ ...service.assertNewBill.mock.calls[0][0] }).toEqual(expected);
+      expect({ ...service.create.mock.calls[0][0] }).toEqual(expected);
+    });
+
     it('checks the new bill (account and R2) before creating, then lets it through', async () => {
       service.create.mockResolvedValue({ id: 13 });
       service.getBillById.mockResolvedValue({ id: 13 });

@@ -6,10 +6,12 @@ import { DataSource, Repository } from 'typeorm';
 import { AccountService } from 'src/account/account.service';
 import { PersonalAccountService } from 'src/account/personal-account.service';
 import { assertAccountRef } from 'src/shared/account-ref';
+import { pickFields } from 'src/shared/pick-fields';
 import { assertSameList } from 'src/shared/same-list';
 import { Subscription } from './entities/subscription.entity';
 
-const UPDATABLE_FIELDS = ['account', 'chargeDay', 'shop', 'category', 'price', 'name'] as const;
+/** Subscription columns a client may set, on create or PATCH. Never id, user or timestamps. */
+const CLIENT_FIELDS = ['account', 'chargeDay', 'shop', 'category', 'price', 'name'] as const;
 
 @Injectable()
 export class SubscriptionService {
@@ -24,15 +26,21 @@ export class SubscriptionService {
   /**
    * Creates a subscription. A target account must be one the user belongs to;
    * no account (the current web app) means the creator's Personal account.
-   * The shop and category must be from that account (R2).
+   * The shop and category must be from that account (R2). Only the client
+   * fields and the user are saved, never an id: a client id would make `save`
+   * overwrite that subscription instead of inserting a new one.
    */
   async createOwned(userId: number | undefined, dto: CreateSubscriptionDto) {
-    await this.assertTargetAccount(dto.account, userId);
-    if (dto.account == null && dto.user?.id != null) {
-      dto.account = await this.personalAccounts.ensurePersonal(dto.user.id);
+    const subscription = {
+      ...pickFields<CreateSubscriptionDto, (typeof CLIENT_FIELDS)[number]>(dto, CLIENT_FIELDS),
+      user: dto.user,
+    };
+    await this.assertTargetAccount(subscription.account, userId);
+    if (subscription.account == null && subscription.user?.id != null) {
+      subscription.account = await this.personalAccounts.ensurePersonal(subscription.user.id);
     }
-    await assertSameList(this.dataSource.manager, dto.account, dto.shop, dto.category);
-    return this.subscriptionRepository.save(dto);
+    await assertSameList(this.dataSource.manager, subscription.account, subscription.shop, subscription.category);
+    return this.subscriptionRepository.save(subscription);
   }
 
   private async assertTargetAccount(account: unknown, userId: number | undefined) {
@@ -76,7 +84,7 @@ export class SubscriptionService {
   async updateOwned(id: number, userId: number | undefined, dto: UpdateSubscriptionDto) {
     const subscription = await this.getOwned(id, userId);
     const changes: Partial<Subscription> = {};
-    for (const key of UPDATABLE_FIELDS) {
+    for (const key of CLIENT_FIELDS) {
       if (key in dto && (dto as any)[key] !== undefined) (changes as any)[key] = (dto as any)[key];
     }
     if (Object.keys(changes).length === 0) return;
