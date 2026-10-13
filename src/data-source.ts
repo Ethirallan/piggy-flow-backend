@@ -9,6 +9,9 @@ try {
   // no .env file: rely on the environment
 }
 
+// Used by the TypeORM CLI (migration:generate, migration:revert). The app runs
+// migrations itself on start. Keep `mariadb`: with `mysql`, generate reads MariaDB's
+// `DEFAULT NULL` as drift on every nullable column and writes phantom ALTERs.
 export default new DataSource({
   type: 'mariadb',
   host: process.env.DB_HOST,
