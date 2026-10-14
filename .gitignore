@@ -37,3 +37,6 @@ lerna-debug.log*
 
 .env
 firebase.json
+
+# TypeScript incremental build cache
+*.tsbuildinfo
