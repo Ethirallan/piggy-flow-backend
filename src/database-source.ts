@@ -10,8 +10,8 @@ export const dataSourceOption: DataSourceOptions = {
   username: DB_USERNAME,
   password: DB_PASSWORD,
   database: DB_DATABASE,
-  entities: [`${__dirname}/**/*.entity.{ts,js}`],
-  migrations: [`${__dirname}/**/migrations/*.{ts,js}`],
+  entities: [`${import.meta.dirname}/**/*.entity.{ts,js}`],
+  migrations: [`${import.meta.dirname}/**/migrations/*.{ts,js}`],
   synchronize: false,
   migrationsRun: true,
 };
