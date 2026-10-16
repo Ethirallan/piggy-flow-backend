@@ -42,10 +42,14 @@ describe('buildLoggerParams', () => {
     expect(httpOptions({ NODE_ENV: 'test' }).level).toBe('info');
   });
 
-  it('pretty-prints only outside production and tests', () => {
+  it('pretty-prints only when NODE_ENV is development', () => {
+    expect(httpOptions({ NODE_ENV: 'development' }).transport).toMatchObject({
+      target: 'pino-pretty',
+    });
     expect(httpOptions({ NODE_ENV: 'production' }).transport).toBeUndefined();
     expect(httpOptions({ NODE_ENV: 'test' }).transport).toBeUndefined();
-    expect(httpOptions({}).transport).toMatchObject({ target: 'pino-pretty' });
+    // pino-pretty is a devDependency: a production install without it must still start.
+    expect(httpOptions({}).transport).toBeUndefined();
   });
 });
 

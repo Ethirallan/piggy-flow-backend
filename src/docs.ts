@@ -17,3 +17,8 @@ export function setupDocs(app: INestApplication): void {
     },
   );
 }
+
+/** API docs are opt-in, so a deploy that forgets NODE_ENV doesn't publish them. */
+export function docsEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.NODE_ENV === 'development';
+}

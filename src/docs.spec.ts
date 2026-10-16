@@ -2,7 +2,7 @@ import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { AppController } from './app.controller.js';
-import { setupDocs } from './docs.js';
+import { docsEnabled, setupDocs } from './docs.js';
 
 describe('setupDocs', () => {
   let app: INestApplication;
@@ -35,5 +35,14 @@ describe('setupDocs', () => {
       type: 'http',
       scheme: 'bearer',
     });
+  });
+});
+
+describe('docsEnabled', () => {
+  it('serves docs only when NODE_ENV is development', () => {
+    expect(docsEnabled({ NODE_ENV: 'development' })).toBe(true);
+    expect(docsEnabled({ NODE_ENV: 'production' })).toBe(false);
+    expect(docsEnabled({ NODE_ENV: 'test' })).toBe(false);
+    expect(docsEnabled({})).toBe(false);
   });
 });
