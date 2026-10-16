@@ -29,12 +29,16 @@ describe('buildLoggerParams', () => {
     });
 
     const output = lines.join('');
-    expect(output).not.toMatch(/hunter22-secret|refresh-secret|new-secret|access-secret/);
+    expect(output).not.toMatch(
+      /hunter22-secret|refresh-secret|new-secret|access-secret/,
+    );
     expect(output).toContain('[REDACTED]');
   });
 
   it('uses LOG_LEVEL, defaulting to info', () => {
-    expect(httpOptions({ NODE_ENV: 'test', LOG_LEVEL: 'warn' }).level).toBe('warn');
+    expect(httpOptions({ NODE_ENV: 'test', LOG_LEVEL: 'warn' }).level).toBe(
+      'warn',
+    );
     expect(httpOptions({ NODE_ENV: 'test' }).level).toBe('info');
   });
 

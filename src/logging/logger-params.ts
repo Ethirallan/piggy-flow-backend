@@ -27,7 +27,9 @@ export function requestIdFrom(header: string | string[] | undefined): string {
     : randomUUID();
 }
 
-export function buildLoggerParams(env: NodeJS.ProcessEnv = process.env): Params {
+export function buildLoggerParams(
+  env: NodeJS.ProcessEnv = process.env,
+): Params {
   const pretty = env.NODE_ENV !== 'production' && env.NODE_ENV !== 'test';
   return {
     pinoHttp: {

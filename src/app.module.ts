@@ -9,7 +9,12 @@ import { buildLoggerParams } from './logging/logger-params.js';
 import { UsersModule } from './users/users.module.js';
 
 @Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true, validate: validateEnv }), LoggerModule.forRoot(buildLoggerParams()), TypeOrmModule.forRoot(dataSourceOption), UsersModule],
+  imports: [
+    ConfigModule.forRoot({ isGlobal: true, validate: validateEnv }),
+    LoggerModule.forRoot(buildLoggerParams()),
+    TypeOrmModule.forRoot(dataSourceOption),
+    UsersModule,
+  ],
   controllers: [AppController],
 })
 export class AppModule {}
