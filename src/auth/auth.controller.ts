@@ -5,6 +5,7 @@ import {
   HttpStatus,
   Ip,
   Post,
+  UseGuards,
 } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
@@ -16,8 +17,10 @@ import {
   ApiOkResponse,
   ApiOperation,
   ApiTags,
+  ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import type { AuthContext } from './auth-context.js';
 import { AuthService } from './auth.service.js';
 import { CurrentUser } from './current-user.decorator.js';
@@ -27,7 +30,9 @@ import { LoginDto } from './dto/login.dto.js';
 import { RefreshDto } from './dto/refresh.dto.js';
 import { RegisterDto } from './dto/register.dto.js';
 import { TokenPairDto } from './dto/token-pair.dto.js';
+import { LoggingThrottlerGuard } from './logging-throttler.guard.js';
 import { Public } from './public.decorator.js';
+import { AUTH_RATE_LIMITS } from './rate-limits.js';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -35,6 +40,11 @@ export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
   @Public()
+  @UseGuards(LoggingThrottlerGuard)
+  @Throttle(AUTH_RATE_LIMITS.register)
+  @ApiTooManyRequestsResponse({
+    description: 'Too many attempts from this IP; try again in a minute',
+  })
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Create an account and log in' })
@@ -46,6 +56,11 @@ export class AuthController {
   }
 
   @Public()
+  @UseGuards(LoggingThrottlerGuard)
+  @Throttle(AUTH_RATE_LIMITS.login)
+  @ApiTooManyRequestsResponse({
+    description: 'Too many attempts from this IP; try again in a minute',
+  })
   @Post('login')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Log in with email and password' })
@@ -57,6 +72,11 @@ export class AuthController {
   }
 
   @Public()
+  @UseGuards(LoggingThrottlerGuard)
+  @Throttle(AUTH_RATE_LIMITS.refresh)
+  @ApiTooManyRequestsResponse({
+    description: 'Too many attempts from this IP; try again in a minute',
+  })
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Swap a refresh token for a new token pair' })
