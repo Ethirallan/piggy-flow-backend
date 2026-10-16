@@ -20,10 +20,10 @@
     "test:cov": "vitest run --coverage",
     "test:debug": "vitest --inspect-brk --no-file-parallelism",
     "test:e2e": "vitest run --config ./vitest.config.e2e.ts",
-    "typeorm:generate": "npx typeorm-ts-node-commonjs migration:generate -d src/database-source.ts",
-    "typeorm:migrate": "npx typeorm-ts-node-commonjs migration:run -d src/database-source.ts",
-    "typeorm:revert": "npx typeorm-ts-node-commonjs migration:revert -d src/database-source.ts",
-    "typeorm:show": "npx typeorm-ts-node-commonjs migration:show -d src/database-source.ts"
+    "typeorm:generate": "nest build && typeorm migration:generate -d dist/database-source.js",
+    "typeorm:migrate": "nest build && typeorm migration:run -d dist/database-source.js",
+    "typeorm:revert": "nest build && typeorm migration:revert -d dist/database-source.js",
+    "typeorm:show": "nest build && typeorm migration:show -d dist/database-source.js"
   },
   "dependencies": {
     "@nestjs/common": "^12.0.1",
