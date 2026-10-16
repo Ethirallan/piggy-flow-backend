@@ -1,5 +1,6 @@
 import {
   ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   UnauthorizedException,
@@ -10,6 +11,7 @@ import type { User } from '../users/user.entity.js';
 import { UsersService } from '../users/users.service.js';
 import type { AuthContext } from './auth-context.js';
 import type { AuthResponseDto } from './dto/auth-response.dto.js';
+import type { ChangePasswordDto } from './dto/change-password.dto.js';
 import type { LoginDto } from './dto/login.dto.js';
 import type { RegisterDto } from './dto/register.dto.js';
 import type { TokenPairDto } from './dto/token-pair.dto.js';
@@ -104,6 +106,43 @@ export class AuthService {
       event: 'auth.logged_out_everywhere',
       userId: auth.userId,
     });
+  }
+
+  /** Signs out every other device; the current one keeps working with a new pair. */
+  async changePassword(
+    auth: AuthContext,
+    dto: ChangePasswordDto,
+  ): Promise<TokenPairDto> {
+    const user = await this.users.findById(auth.userId);
+    if (!user) {
+      throw new UnauthorizedException();
+    }
+    if (
+      !(await this.passwords.verify(user.passwordHash, dto.currentPassword))
+    ) {
+      throw new ForbiddenException('Current password is incorrect');
+    }
+    // Renew first: if the current session is gone, nothing changes.
+    const refreshToken = await this.sessions.reissue(auth.sessionId);
+    if (!refreshToken) {
+      throw new UnauthorizedException();
+    }
+    await this.users.updatePasswordHash(
+      user.id,
+      await this.passwords.hash(dto.newPassword),
+    );
+    await this.sessions.revokeAllExcept(user.id, auth.sessionId);
+
+    this.logger.log({
+      event: 'auth.password_changed',
+      userId: user.id,
+      sessionId: auth.sessionId,
+    });
+    const accessToken = await this.tokens.signAccessToken({
+      sub: user.id,
+      sid: auth.sessionId,
+    });
+    return { accessToken, refreshToken };
   }
 
   private async startSession(

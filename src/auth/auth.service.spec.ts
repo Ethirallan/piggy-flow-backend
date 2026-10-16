@@ -1,5 +1,6 @@
 import {
   ConflictException,
+  ForbiddenException,
   Logger,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -269,6 +270,63 @@ describe('AuthService', () => {
       await service.logoutAll({ userId: 'user-1', sessionId: 'session-1' });
 
       expect(sessions.revokeAll).toHaveBeenCalledWith('user-1');
+    });
+  });
+
+  describe('changePassword', () => {
+    const auth = { userId: 'user-1', sessionId: 'session-1' };
+    const dto = {
+      currentPassword: 'old password',
+      newPassword: 'new password',
+    };
+
+    it('stores the new hash, ends other sessions and renews the current one', async () => {
+      const { service, users, passwords, sessions } = setup();
+      users.findById.mockResolvedValue(user);
+      passwords.verify.mockResolvedValue(true);
+      sessions.reissue.mockResolvedValue('renewed-refresh');
+
+      await expect(service.changePassword(auth, dto)).resolves.toEqual({
+        accessToken: 'access-token',
+        refreshToken: 'renewed-refresh',
+      });
+      expect(passwords.verify).toHaveBeenCalledWith(
+        'stored-hash',
+        'old password',
+      );
+      expect(passwords.hash).toHaveBeenCalledWith('new password');
+      expect(users.updatePasswordHash).toHaveBeenCalledWith(
+        'user-1',
+        'new-hash',
+      );
+      expect(sessions.revokeAllExcept).toHaveBeenCalledWith(
+        'user-1',
+        'session-1',
+      );
+    });
+
+    it('answers 403 for a wrong current password and changes nothing', async () => {
+      const { service, users, passwords, sessions } = setup();
+      users.findById.mockResolvedValue(user);
+      passwords.verify.mockResolvedValue(false);
+
+      await expect(service.changePassword(auth, dto)).rejects.toThrow(
+        new ForbiddenException('Current password is incorrect'),
+      );
+      expect(users.updatePasswordHash).not.toHaveBeenCalled();
+      expect(sessions.revokeAllExcept).not.toHaveBeenCalled();
+    });
+
+    it('answers 401 and changes nothing when the current session is gone', async () => {
+      const { service, users, passwords, sessions } = setup();
+      users.findById.mockResolvedValue(user);
+      passwords.verify.mockResolvedValue(true);
+      sessions.reissue.mockResolvedValue(null);
+
+      await expect(service.changePassword(auth, dto)).rejects.toThrow(
+        UnauthorizedException,
+      );
+      expect(users.updatePasswordHash).not.toHaveBeenCalled();
     });
   });
 });

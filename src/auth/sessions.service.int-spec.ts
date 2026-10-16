@@ -166,4 +166,31 @@ describe('SessionsService (integration)', () => {
 
     await expect(sessions.existsBy({ id: sessionId })).resolves.toBe(false);
   });
+
+  it('revokes every other session of the user and keeps other users', async () => {
+    const keep = await service.create(userId);
+    await service.create(userId);
+    const bob = await service.create((await createUser('bob@example.com')).id);
+
+    await service.revokeAllExcept(userId, keep.sessionId);
+
+    const ids = (await sessions.find()).map((row) => row.id).sort();
+    expect(ids).toEqual([keep.sessionId, bob.sessionId].sort());
+  });
+
+  it('reissues a fresh refresh token for an existing session', async () => {
+    const { sessionId, refreshToken } = await service.create(userId);
+
+    const reissued = await service.reissue(sessionId);
+
+    expect(reissued).not.toBe(refreshToken);
+    expect(tokens.parseRefreshToken(reissued!)?.sessionId).toBe(sessionId);
+    await expect(service.rotate(refreshToken)).resolves.toMatchObject({
+      status: 'reused',
+    });
+  });
+
+  it('reissues nothing for a session that is gone', async () => {
+    await expect(service.reissue(randomUUID())).resolves.toBeNull();
+  });
 });

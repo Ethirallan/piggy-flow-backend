@@ -11,6 +11,7 @@ import {
   ApiBearerAuth,
   ApiConflictResponse,
   ApiCreatedResponse,
+  ApiForbiddenResponse,
   ApiNoContentResponse,
   ApiOkResponse,
   ApiOperation,
@@ -21,6 +22,7 @@ import type { AuthContext } from './auth-context.js';
 import { AuthService } from './auth.service.js';
 import { CurrentUser } from './current-user.decorator.js';
 import { AuthResponseDto } from './dto/auth-response.dto.js';
+import { ChangePasswordDto } from './dto/change-password.dto.js';
 import { LoginDto } from './dto/login.dto.js';
 import { RefreshDto } from './dto/refresh.dto.js';
 import { RegisterDto } from './dto/register.dto.js';
@@ -87,5 +89,25 @@ export class AuthController {
   @ApiUnauthorizedResponse({ description: 'Missing or invalid access token' })
   logoutAll(@CurrentUser() auth: AuthContext): Promise<void> {
     return this.auth.logoutAll(auth);
+  }
+
+  @Post('change-password')
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Change the password and sign out every other device',
+  })
+  @ApiOkResponse({
+    type: TokenPairDto,
+    description: 'A new pair for the current device',
+  })
+  @ApiBadRequestResponse({ description: 'The body failed validation' })
+  @ApiUnauthorizedResponse({ description: 'Missing or invalid access token' })
+  @ApiForbiddenResponse({ description: 'Current password is incorrect' })
+  changePassword(
+    @CurrentUser() auth: AuthContext,
+    @Body() dto: ChangePasswordDto,
+  ): Promise<TokenPairDto> {
+    return this.auth.changePassword(auth, dto);
   }
 }
