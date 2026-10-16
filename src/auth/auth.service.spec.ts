@@ -188,4 +188,87 @@ describe('AuthService', () => {
       expect(calls).not.toContain('hunter22-secret');
     });
   });
+
+  describe('refresh', () => {
+    it('returns a new pair for a rotated session', async () => {
+      const { service, sessions, tokens } = setup();
+      sessions.rotate.mockResolvedValue({
+        status: 'rotated',
+        userId: 'user-1',
+        sessionId: 'session-1',
+        refreshToken: 'next-refresh',
+      });
+
+      await expect(service.refresh('old-refresh')).resolves.toEqual({
+        accessToken: 'access-token',
+        refreshToken: 'next-refresh',
+      });
+      expect(tokens.signAccessToken).toHaveBeenCalledWith({
+        sub: 'user-1',
+        sid: 'session-1',
+      });
+    });
+
+    it('answers 401 for an invalid token', async () => {
+      const { service, sessions } = setup();
+      sessions.rotate.mockResolvedValue({ status: 'invalid' });
+
+      await expect(service.refresh('bad')).rejects.toThrow(
+        UnauthorizedException,
+      );
+    });
+
+    it('answers 401 and warns when a used token comes back', async () => {
+      const { service, sessions } = setup();
+      sessions.rotate.mockResolvedValue({
+        status: 'reused',
+        userId: 'user-1',
+        sessionId: 'session-1',
+      });
+
+      await expect(service.refresh('old')).rejects.toThrow(
+        UnauthorizedException,
+      );
+      expect(warn).toHaveBeenCalledWith({
+        event: 'auth.refresh_reuse_detected',
+        userId: 'user-1',
+        sessionId: 'session-1',
+      });
+    });
+  });
+
+  describe('logout', () => {
+    it('revokes the session and logs it', async () => {
+      const { service, sessions } = setup();
+      sessions.revoke.mockResolvedValue({
+        userId: 'user-1',
+        sessionId: 'session-1',
+      });
+
+      await service.logout('refresh');
+
+      expect(sessions.revoke).toHaveBeenCalledWith('refresh');
+      expect(log).toHaveBeenCalledWith({
+        event: 'auth.logged_out',
+        userId: 'user-1',
+        sessionId: 'session-1',
+      });
+    });
+
+    it('does nothing for a token that matches no session', async () => {
+      const { service, sessions } = setup();
+      sessions.revoke.mockResolvedValue(null);
+
+      await expect(service.logout('bad')).resolves.toBeUndefined();
+      expect(log).not.toHaveBeenCalled();
+    });
+
+    it('revokes every session of the caller', async () => {
+      const { service, sessions } = setup();
+
+      await service.logoutAll({ userId: 'user-1', sessionId: 'session-1' });
+
+      expect(sessions.revokeAll).toHaveBeenCalledWith('user-1');
+    });
+  });
 });
