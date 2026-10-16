@@ -8,6 +8,7 @@ import { UserResponseDto } from '../users/dto/user-response.dto.js';
 import { EmailTakenError } from '../users/email-taken.error.js';
 import type { User } from '../users/user.entity.js';
 import { UsersService } from '../users/users.service.js';
+import type { AuthContext } from './auth-context.js';
 import type { AuthResponseDto } from './dto/auth-response.dto.js';
 import type { LoginDto } from './dto/login.dto.js';
 import type { RegisterDto } from './dto/register.dto.js';
@@ -68,6 +69,41 @@ export class AuthService {
     );
     this.logger.log({ event: 'auth.logged_in', userId: user.id, sessionId });
     return { accessToken, refreshToken, user: UserResponseDto.from(user) };
+  }
+
+  async refresh(refreshToken: string): Promise<TokenPairDto> {
+    const result = await this.sessions.rotate(refreshToken);
+    if (result.status === 'reused') {
+      this.logger.warn({
+        event: 'auth.refresh_reuse_detected',
+        userId: result.userId,
+        sessionId: result.sessionId,
+      });
+    }
+    if (result.status !== 'rotated') {
+      throw new UnauthorizedException();
+    }
+    const accessToken = await this.tokens.signAccessToken({
+      sub: result.userId,
+      sid: result.sessionId,
+    });
+    return { accessToken, refreshToken: result.refreshToken };
+  }
+
+  /** Always succeeds, so the endpoint can't be used to test tokens. */
+  async logout(refreshToken: string): Promise<void> {
+    const session = await this.sessions.revoke(refreshToken);
+    if (session) {
+      this.logger.log({ event: 'auth.logged_out', ...session });
+    }
+  }
+
+  async logoutAll(auth: AuthContext): Promise<void> {
+    await this.sessions.revokeAll(auth.userId);
+    this.logger.log({
+      event: 'auth.logged_out_everywhere',
+      userId: auth.userId,
+    });
   }
 
   private async startSession(
