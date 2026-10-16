@@ -7,7 +7,7 @@ function createRepository() {
   return {
     findOneBy: vi.fn(),
     create: vi.fn((input: Partial<User>) => ({ ...input }) as User),
-    save: vi.fn(async (user: User) => ({ ...user, id: 'user-1' })),
+    save: vi.fn(async (user: User) => Object.assign(user, { id: 'user-1' })),
     update: vi.fn(),
   };
 }
