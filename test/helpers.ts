@@ -1,6 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
+import request from 'supertest';
 import { DataSource } from 'typeorm';
 import { inject } from 'vitest';
 import { configureApp } from '../src/app.setup.js';
@@ -31,4 +32,27 @@ export async function createTestApp(): Promise<NestExpressApplication> {
 /** Empties every table except the migrations log. */
 export function resetDatabase(app: INestApplication): Promise<void> {
   return truncateTables(app.get(DataSource));
+}
+
+export const DEFAULT_PASSWORD = 'correct horse battery staple';
+
+export interface RegisteredUser {
+  accessToken: string;
+  refreshToken: string;
+  user: { id: string; email: string; displayName: string; createdAt: string };
+  password: string;
+}
+
+export async function registerUser(
+  app: INestApplication,
+  email = 'ana@example.com',
+): Promise<RegisteredUser> {
+  const res = await request(app.getHttpServer())
+    .post('/auth/register')
+    .send({ email, password: DEFAULT_PASSWORD, displayName: 'Ana' })
+    .expect(201);
+  return {
+    ...(res.body as Omit<RegisteredUser, 'password'>),
+    password: DEFAULT_PASSWORD,
+  };
 }
