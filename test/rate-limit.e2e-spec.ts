@@ -1,6 +1,11 @@
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { createTestApp, resetDatabase } from './helpers.js';
+import {
+  createTestApp,
+  DEFAULT_PASSWORD,
+  registerUser,
+  resetDatabase,
+} from './helpers.js';
 
 const badLogin = { email: 'ana@example.com', password: 'wrong password' };
 
@@ -26,6 +31,20 @@ describe('rate limits (e2e)', () => {
         .post('/auth/login')
         .send(badLogin)
         .expect(429);
+    });
+
+    it('allows 5 password-change attempts per minute, then answers 429', async () => {
+      const { accessToken } = await registerUser(app);
+      const changePassword = () =>
+        request(app.getHttpServer())
+          .post('/auth/change-password')
+          .set('Authorization', `Bearer ${accessToken}`)
+          .send({ currentPassword: 'not my password', newPassword: DEFAULT_PASSWORD });
+
+      for (let attempt = 0; attempt < 5; attempt++) {
+        await changePassword().expect(403);
+      }
+      await changePassword().expect(429);
     });
 
     it('does not limit other routes', async () => {

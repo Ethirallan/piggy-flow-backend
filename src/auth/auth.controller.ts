@@ -112,6 +112,8 @@ export class AuthController {
   }
 
   @Post('change-password')
+  @UseGuards(LoggingThrottlerGuard)
+  @Throttle(AUTH_RATE_LIMITS.changePassword)
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
   @ApiOperation({
@@ -124,6 +126,9 @@ export class AuthController {
   @ApiBadRequestResponse({ description: 'The body failed validation' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid access token' })
   @ApiForbiddenResponse({ description: 'Current password is incorrect' })
+  @ApiTooManyRequestsResponse({
+    description: 'Too many attempts from this IP; try again in a minute',
+  })
   changePassword(
     @CurrentUser() auth: AuthContext,
     @Body() dto: ChangePasswordDto,
