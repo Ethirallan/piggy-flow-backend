@@ -63,9 +63,9 @@ describe('/users/me (e2e)', () => {
     ['a blank display name', { displayName: '  ' }],
     ['a 101-character display name', { displayName: 'a'.repeat(101) }],
     ['an email change', { displayName: 'Ana', email: 'evil@example.com' }],
-  ])('answers 400 for %s', (_case, body) =>
-    asAna(request(app.getHttpServer()).patch('/users/me'))
+  ])('answers 400 for %s', async (_case, body) => {
+    await asAna(request(app.getHttpServer()).patch('/users/me'))
       .send(body)
-      .expect(400),
-  );
+      .expect(400);
+  });
 });

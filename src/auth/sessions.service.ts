@@ -1,7 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Not, Repository } from 'typeorm';
 import { Session } from './session.entity.js';
 import { TokenService } from './token.service.js';
 
@@ -95,6 +95,27 @@ export class SessionsService {
 
   async revokeAll(userId: string): Promise<void> {
     await this.sessions.delete({ userId });
+  }
+
+  async revokeAllExcept(userId: string, keepSessionId: string): Promise<void> {
+    await this.sessions.delete({ userId, id: Not(keepSessionId) });
+  }
+
+  /** Gives an existing session a new refresh secret, e.g. after a password change. */
+  async reissue(sessionId: string): Promise<string | null> {
+    const secret = this.tokens.createRefreshSecret();
+    const now = new Date();
+    const result = await this.sessions.update(
+      { id: sessionId },
+      {
+        tokenHash: this.tokens.hashRefreshSecret(secret),
+        expiresAt: expiryFrom(now),
+        lastUsedAt: now,
+      },
+    );
+    return result.affected === 1
+      ? this.tokens.formatRefreshToken(sessionId, secret)
+      : null;
   }
 
   private async findByToken(
