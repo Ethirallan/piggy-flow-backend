@@ -1,14 +1,22 @@
-import { ConflictException, Injectable, Logger } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  Logger,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { UserResponseDto } from '../users/dto/user-response.dto.js';
 import { EmailTakenError } from '../users/email-taken.error.js';
 import type { User } from '../users/user.entity.js';
 import { UsersService } from '../users/users.service.js';
 import type { AuthResponseDto } from './dto/auth-response.dto.js';
+import type { LoginDto } from './dto/login.dto.js';
 import type { RegisterDto } from './dto/register.dto.js';
 import type { TokenPairDto } from './dto/token-pair.dto.js';
 import { PasswordService } from './password.service.js';
 import { SessionsService } from './sessions.service.js';
 import { TokenService } from './token.service.js';
+
+export const INVALID_CREDENTIALS = 'Invalid email or password';
 
 @Injectable()
 export class AuthService {
@@ -41,6 +49,24 @@ export class AuthService {
       user.id,
     );
     this.logger.log({ event: 'auth.registered', userId: user.id, sessionId });
+    return { accessToken, refreshToken, user: UserResponseDto.from(user) };
+  }
+
+  async login(dto: LoginDto, ip: string | undefined): Promise<AuthResponseDto> {
+    const user = await this.users.findByEmail(dto.email);
+    // An unknown email still costs a full argon2 check, so timing doesn't reveal it.
+    const passwordOk = user
+      ? await this.passwords.verify(user.passwordHash, dto.password)
+      : await this.passwords.verifyDummy(dto.password);
+    if (!user || !passwordOk) {
+      this.logger.warn({ event: 'auth.login_failed', ip });
+      throw new UnauthorizedException(INVALID_CREDENTIALS);
+    }
+
+    const { sessionId, accessToken, refreshToken } = await this.startSession(
+      user.id,
+    );
+    this.logger.log({ event: 'auth.logged_in', userId: user.id, sessionId });
     return { accessToken, refreshToken, user: UserResponseDto.from(user) };
   }
 

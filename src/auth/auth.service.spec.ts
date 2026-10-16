@@ -1,4 +1,8 @@
-import { ConflictException, Logger } from '@nestjs/common';
+import {
+  ConflictException,
+  Logger,
+  UnauthorizedException,
+} from '@nestjs/common';
 import type { MockInstance } from 'vitest';
 import { EmailTakenError } from '../users/email-taken.error.js';
 import type { User } from '../users/user.entity.js';
@@ -52,10 +56,13 @@ function setup() {
 
 describe('AuthService', () => {
   let log: MockInstance;
+  let warn: MockInstance;
 
   beforeEach(() => {
     log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
-    vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    warn = vi
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
   });
 
   afterEach(() => {
@@ -114,6 +121,71 @@ describe('AuthService', () => {
       expect(calls).toContain('auth.registered');
       expect(calls).not.toContain('ana@example.com');
       expect(calls).not.toContain('correct horse');
+    });
+  });
+
+  describe('login', () => {
+    const dto = { email: 'ana@example.com', password: 'hunter22-secret' };
+
+    it('starts a session for the right password', async () => {
+      const { service, users, passwords, sessions } = setup();
+      users.findByEmail.mockResolvedValue(user);
+      passwords.verify.mockResolvedValue(true);
+
+      await expect(service.login(dto, '1.2.3.4')).resolves.toMatchObject({
+        accessToken: 'access-token',
+        refreshToken: 'refresh-token',
+        user: { id: 'user-1' },
+      });
+      expect(passwords.verify).toHaveBeenCalledWith(
+        'stored-hash',
+        'hunter22-secret',
+      );
+      expect(sessions.create).toHaveBeenCalledWith('user-1');
+    });
+
+    it('gives the same error for a wrong password and an unknown email', async () => {
+      const wrongPassword = setup();
+      wrongPassword.users.findByEmail.mockResolvedValue(user);
+      wrongPassword.passwords.verify.mockResolvedValue(false);
+      const unknownEmail = setup();
+      unknownEmail.users.findByEmail.mockResolvedValue(null);
+
+      const expected = new UnauthorizedException('Invalid email or password');
+      await expect(wrongPassword.service.login(dto, undefined)).rejects.toThrow(
+        expected,
+      );
+      await expect(unknownEmail.service.login(dto, undefined)).rejects.toThrow(
+        expected,
+      );
+      expect(wrongPassword.sessions.create).not.toHaveBeenCalled();
+      expect(unknownEmail.sessions.create).not.toHaveBeenCalled();
+    });
+
+    it('still runs a password check for an unknown email', async () => {
+      const { service, users, passwords } = setup();
+      users.findByEmail.mockResolvedValue(null);
+
+      await expect(service.login(dto, undefined)).rejects.toThrow(
+        UnauthorizedException,
+      );
+      expect(passwords.verifyDummy).toHaveBeenCalledWith('hunter22-secret');
+    });
+
+    it('logs failures and successes without the email or password', async () => {
+      const { service, users, passwords } = setup();
+      users.findByEmail.mockResolvedValueOnce(null).mockResolvedValueOnce(user);
+      passwords.verify.mockResolvedValue(true);
+
+      await expect(service.login(dto, '1.2.3.4')).rejects.toThrow();
+      await service.login(dto, '1.2.3.4');
+
+      const calls = JSON.stringify([...log.mock.calls, ...warn.mock.calls]);
+      expect(calls).toContain('auth.login_failed');
+      expect(calls).toContain('auth.logged_in');
+      expect(calls).toContain('1.2.3.4');
+      expect(calls).not.toContain('ana@example.com');
+      expect(calls).not.toContain('hunter22-secret');
     });
   });
 });
