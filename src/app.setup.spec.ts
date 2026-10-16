@@ -3,7 +3,7 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import { IsString } from 'class-validator';
 import request from 'supertest';
-import { configureApp } from './app.setup.js';
+import { configureApp, parseTrustProxy } from './app.setup.js';
 
 class EchoDto {
   @IsString()
@@ -46,4 +46,19 @@ describe('configureApp', () => {
 
   it('rejects fields of the wrong type', () =>
     request(app.getHttpServer()).post('/echo').send({ name: 1 }).expect(400));
+});
+
+describe('parseTrustProxy', () => {
+  it.each([
+    [undefined, undefined],
+    ['', undefined],
+    ['1', 1],
+    ['2', 2],
+    ['true', true],
+    ['false', false],
+    ['loopback', 'loopback'],
+    ['10.0.0.0/8, 172.16.0.0/12', '10.0.0.0/8, 172.16.0.0/12'],
+  ])('parses %j as %j', (input, expected) => {
+    expect(parseTrustProxy(input)).toBe(expected);
+  });
 });
