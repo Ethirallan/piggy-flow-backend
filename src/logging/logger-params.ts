@@ -30,7 +30,9 @@ export function requestIdFrom(header: string | string[] | undefined): string {
 export function buildLoggerParams(
   env: NodeJS.ProcessEnv = process.env,
 ): Params {
-  const pretty = env.NODE_ENV !== 'production' && env.NODE_ENV !== 'test';
+  // Opt-in: pino-pretty is a devDependency, so anything but an explicit
+  // development environment logs plain JSON.
+  const pretty = env.NODE_ENV === 'development';
   return {
     pinoHttp: {
       level: env.LOG_LEVEL ?? 'info',
