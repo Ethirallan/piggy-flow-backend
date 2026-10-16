@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AppController } from './app.controller.js';
+import { AuthModule } from './auth/auth.module.js';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { LoggerModule } from 'nestjs-pino';
@@ -18,6 +19,7 @@ import { UsersModule } from './users/users.module.js';
       autoLoadEntities: true,
     }),
     UsersModule,
+    AuthModule,
   ],
   controllers: [AppController],
 })

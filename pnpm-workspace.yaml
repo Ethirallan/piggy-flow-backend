@@ -1,5 +1,6 @@
 allowBuilds:
   '@scarf/scarf': false
+  argon2: false
   cpu-features: false
   protobufjs: false
   ssh2: false
