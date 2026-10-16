@@ -10,8 +10,13 @@ export const dataSourceOption: DataSourceOptions = {
   username: DB_USERNAME,
   password: DB_PASSWORD,
   database: DB_DATABASE,
-  entities: [`${import.meta.dirname}/**/*.entity.{ts,js}`],
-  migrations: [`${import.meta.dirname}/**/migrations/*.{ts,js}`],
+  // Compiled files only: TypeORM imports these with Node's own import(),
+  // which can't run decorated TypeScript. The app itself registers entities
+  // through TypeOrmModule.forFeature (autoLoadEntities in app.module.ts).
+  entities: [`${import.meta.dirname}/**/*.entity.js`],
+  migrations: [`${import.meta.dirname}/**/migrations/*.js`],
+  // gen_random_uuid() is built into Postgres 13+, unlike uuid-ossp.
+  uuidExtension: 'pgcrypto',
   synchronize: false,
   migrationsRun: true,
 };

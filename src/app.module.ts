@@ -12,7 +12,11 @@ import { UsersModule } from './users/users.module.js';
   imports: [
     ConfigModule.forRoot({ isGlobal: true, validate: validateEnv }),
     LoggerModule.forRoot(buildLoggerParams()),
-    TypeOrmModule.forRoot(dataSourceOption),
+    TypeOrmModule.forRoot({
+      ...dataSourceOption,
+      entities: [],
+      autoLoadEntities: true,
+    }),
     UsersModule,
   ],
   controllers: [AppController],
