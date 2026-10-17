@@ -84,4 +84,25 @@ describe('AccountMembersService (integration)', () => {
       ).resolves.toBe(0);
     }
   });
+
+  it('never leaves an account without members when two members remove each other at once', async () => {
+    // Several rounds, so an unlocked version would almost surely interleave.
+    for (let round = 0; round < 10; round++) {
+      await truncateTables(dataSource);
+      const ana = await createUser('ana@example.com');
+      const bob = await createUser('bob@example.com');
+      const home = await accounts.create(ana.id, 'Home');
+      await dataSource
+        .getRepository(AccountMember)
+        .insert({ accountId: home.id, userId: bob.id });
+
+      const results = await Promise.allSettled([
+        members.remove(home.id, ana.id, bob.id),
+        members.remove(home.id, bob.id, ana.id),
+      ]);
+
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      expect(await memberCount(home.id)).toBe(1);
+    }
+  });
 });
