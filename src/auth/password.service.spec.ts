@@ -25,4 +25,14 @@ describe('PasswordService', () => {
   it('always rejects in the dummy check used for unknown emails', async () => {
     await expect(service.verifyDummy('anything')).resolves.toBe(false);
   });
+
+  it('prepares the dummy hash at startup, so the first unknown-email login costs no extra hash', async () => {
+    const fresh = new PasswordService();
+    await fresh.onModuleInit();
+    const hash = vi.spyOn(fresh, 'hash');
+
+    await fresh.verifyDummy('anything');
+
+    expect(hash).not.toHaveBeenCalled();
+  });
 });
