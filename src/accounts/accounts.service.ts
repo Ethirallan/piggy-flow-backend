@@ -1,5 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import type { EntityManager } from 'typeorm';
+import { InjectRepository } from '@nestjs/typeorm';
+import { DataSource, type EntityManager, Repository } from 'typeorm';
+import { compareAccounts } from './account-order.js';
 import { AccountMember } from './account-member.entity.js';
 import { Account } from './account.entity.js';
 
@@ -7,6 +9,30 @@ export const PERSONAL_ACCOUNT_NAME = 'Personal';
 
 @Injectable()
 export class AccountsService {
+  constructor(
+    @InjectRepository(AccountMember)
+    private readonly members: Repository<AccountMember>,
+    private readonly dataSource: DataSource,
+  ) {}
+
+  /** The user's accounts: Personal first, then by name. */
+  async listForUser(userId: string): Promise<Account[]> {
+    const memberships = await this.members.find({
+      where: { userId },
+      relations: { account: true },
+    });
+    return memberships
+      .map((membership) => membership.account!)
+      .sort(compareAccounts);
+  }
+
+  /** A shared account with the caller as its only member. */
+  create(userId: string, name: string): Promise<Account> {
+    return this.dataSource.transaction((manager) =>
+      this.createWithMember(userId, name, false, manager),
+    );
+  }
+
   /**
    * Only register calls this, inside its transaction: it's the one place a
    * Personal account is created, which keeps it to one per user.
