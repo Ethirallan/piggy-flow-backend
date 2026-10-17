@@ -66,3 +66,19 @@ export async function registerUser(
     password: DEFAULT_PASSWORD,
   };
 }
+
+/** supertest requests that carry the user's access token. */
+export function asUser(app: INestApplication, accessToken: string) {
+  const server = app.getHttpServer();
+  const authorization = `Bearer ${accessToken}`;
+  return {
+    get: (url: string) =>
+      request(server).get(url).set('Authorization', authorization),
+    post: (url: string) =>
+      request(server).post(url).set('Authorization', authorization),
+    patch: (url: string) =>
+      request(server).patch(url).set('Authorization', authorization),
+    delete: (url: string) =>
+      request(server).delete(url).set('Authorization', authorization),
+  };
+}
