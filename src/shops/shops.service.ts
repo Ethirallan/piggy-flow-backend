@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AccountsService } from '../accounts/accounts.service.js';
@@ -29,6 +29,39 @@ export class ShopsService {
       return await this.shops.save(this.shops.create({ accountId, name }));
     } catch (error) {
       rethrowListWriteError(error, SHOP_NAME_TAKEN);
+    }
+  }
+
+  /** A filtered UPDATE, never save(): a shop deleted meanwhile stays deleted (404). */
+  async rename(
+    accountId: string,
+    userId: string,
+    id: string,
+    name: string,
+  ): Promise<Shop> {
+    await this.accounts.findForMember(accountId, userId);
+    let affected: number | undefined;
+    try {
+      ({ affected } = await this.shops.update({ id, accountId }, { name }));
+    } catch (error) {
+      rethrowListWriteError(error, SHOP_NAME_TAKEN);
+    }
+    const shop = affected
+      ? await this.shops.findOneBy({ id, accountId })
+      : null;
+    if (!shop) {
+      throw new NotFoundException(SHOP_NOT_FOUND);
+    }
+    return shop;
+  }
+
+  async delete(accountId: string, userId: string, id: string): Promise<void> {
+    await this.accounts.findForMember(accountId, userId);
+    // Bills and subscriptions add their "still in use" 409 check here; their
+    // ON DELETE RESTRICT foreign keys back it up.
+    const { affected } = await this.shops.delete({ id, accountId });
+    if (!affected) {
+      throw new NotFoundException(SHOP_NOT_FOUND);
     }
   }
 }

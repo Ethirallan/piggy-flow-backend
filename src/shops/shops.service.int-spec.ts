@@ -125,4 +125,16 @@ describe('ShopsService (integration)', () => {
       expect(await shopCount()).toBe(0);
     }
   });
+
+  it('answers 404 when renaming a shop deleted meanwhile, and re-creates nothing', async () => {
+    const ana = await createUser();
+    const home = await accounts.create(ana.id, 'Home');
+    const shop = await shops.create(home.id, ana.id, 'Lidl');
+    await shops.delete(home.id, ana.id, shop.id);
+
+    await expect(
+      shops.rename(home.id, ana.id, shop.id, 'Spar'),
+    ).rejects.toThrow(new NotFoundException('Shop not found'));
+    expect(await shopCount()).toBe(0);
+  });
 });

@@ -125,4 +125,108 @@ describe('shops (e2e)', () => {
         .expect(401);
     });
   });
+
+  describe('PATCH and DELETE /accounts/:accountId/shops/:id', () => {
+    const createShop = async (as: As, accountId: string, name: string) =>
+      (
+        (
+          await as
+            .post(`/accounts/${accountId}/shops`)
+            .send({ name })
+            .expect(201)
+        ).body as { id: string; updatedAt: string }
+      ).id;
+
+    it('renames a shop and trims the name', async () => {
+      const ana = asUser(app, (await registerUser(app)).accessToken);
+      const accountId = await personalAccountId(ana);
+      const id = await createShop(ana, accountId, 'Lidl');
+
+      const res = await ana
+        .patch(`/accounts/${accountId}/shops/${id}`)
+        .send({ name: ' Lidl Center ' })
+        .expect(200);
+
+      expect(res.body).toMatchObject({ id, accountId, name: 'Lidl Center' });
+      expect(await shopNames(ana, accountId)).toEqual(['Lidl Center']);
+    });
+
+    it('answers 409 when renaming to a name the account already has in another case', async () => {
+      const ana = asUser(app, (await registerUser(app)).accessToken);
+      const accountId = await personalAccountId(ana);
+      await createShop(ana, accountId, 'Lidl');
+      const id = await createShop(ana, accountId, 'Spar');
+
+      await ana
+        .patch(`/accounts/${accountId}/shops/${id}`)
+        .send({ name: 'lidl' })
+        .expect(409);
+
+      expect(await shopNames(ana, accountId)).toEqual(['Lidl', 'Spar']);
+    });
+
+    it('deletes a shop; a second delete answers 404', async () => {
+      const ana = asUser(app, (await registerUser(app)).accessToken);
+      const accountId = await personalAccountId(ana);
+      const id = await createShop(ana, accountId, 'Lidl');
+
+      await ana.delete(`/accounts/${accountId}/shops/${id}`).expect(204);
+      await ana.delete(`/accounts/${accountId}/shops/${id}`).expect(404);
+
+      expect(await shopNames(ana, accountId)).toEqual([]);
+    });
+
+    it("answers 404 for a shop of another of the user's accounts, and changes nothing", async () => {
+      const ana = asUser(app, (await registerUser(app)).accessToken);
+      const personal = await personalAccountId(ana);
+      const home = await createAccount(ana, 'Home');
+      const id = await createShop(ana, home, 'Lidl');
+
+      const res = await ana
+        .patch(`/accounts/${personal}/shops/${id}`)
+        .send({ name: 'Mine' })
+        .expect(404);
+      await ana.delete(`/accounts/${personal}/shops/${id}`).expect(404);
+
+      expect(res.body.message).toBe('Shop not found');
+      expect(await shopNames(ana, home)).toEqual(['Lidl']);
+    });
+
+    it("answers 404 for someone else's account", async () => {
+      const ana = asUser(
+        app,
+        (await registerUser(app, 'ana@example.com')).accessToken,
+      );
+      const bob = asUser(
+        app,
+        (await registerUser(app, 'bob@example.com')).accessToken,
+      );
+      const anas = await personalAccountId(ana);
+      const id = await createShop(ana, anas, 'Lidl');
+
+      await bob
+        .patch(`/accounts/${anas}/shops/${id}`)
+        .send({ name: 'Mine' })
+        .expect(404);
+      await bob.delete(`/accounts/${anas}/shops/${id}`).expect(404);
+
+      expect(await shopNames(ana, anas)).toEqual(['Lidl']);
+    });
+
+    it('answers 400 for a blank name and for a shop id that is not a UUID', async () => {
+      const ana = asUser(app, (await registerUser(app)).accessToken);
+      const accountId = await personalAccountId(ana);
+      const id = await createShop(ana, accountId, 'Lidl');
+
+      await ana
+        .patch(`/accounts/${accountId}/shops/${id}`)
+        .send({ name: ' ' })
+        .expect(400);
+      await ana
+        .patch(`/accounts/${accountId}/shops/123`)
+        .send({ name: 'X' })
+        .expect(400);
+      await ana.delete(`/accounts/${accountId}/shops/123`).expect(400);
+    });
+  });
 });
