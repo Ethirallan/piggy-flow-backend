@@ -34,7 +34,7 @@ export class AccountMembersService {
       if (account.isPersonal) {
         throw new ConflictException("The Personal account can't be shared");
       }
-      const user = await this.users.findByEmail(email);
+      const user = await this.users.findByEmail(email, manager);
       if (!user) {
         throw new NotFoundException('No user with that email');
       }

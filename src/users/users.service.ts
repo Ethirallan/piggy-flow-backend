@@ -23,8 +23,9 @@ export class UsersService {
     return this.users.findOneBy({ id });
   }
 
-  findByEmail(email: string): Promise<User | null> {
-    return this.users.findOneBy({ email: normalizeEmail(email) });
+  /** Pass `manager` to run inside that transaction. */
+  findByEmail(email: string, manager?: EntityManager): Promise<User | null> {
+    return this.repository(manager).findOneBy({ email: normalizeEmail(email) });
   }
 
   /** Pass `manager` to run inside that transaction. */

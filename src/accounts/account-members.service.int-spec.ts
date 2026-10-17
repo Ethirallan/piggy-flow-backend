@@ -59,6 +59,35 @@ describe('AccountMembersService (integration)', () => {
     }
   });
 
+  it('does not deadlock the connection pool when many members are added at once', async () => {
+    // The pg pool default. Each add holds a transaction connection, so if it
+    // also needs a second one for the email lookup, this many adds starve the
+    // pool and wait forever.
+    const POOL_SIZE = 10;
+    await createUser('bob@example.com');
+    const owners = await Promise.all(
+      Array.from({ length: POOL_SIZE }, (_, i) =>
+        createUser(`owner${i}@example.com`),
+      ),
+    );
+    const homes = await Promise.all(
+      owners.map((owner, i) => accounts.create(owner.id, `Home ${i}`)),
+    );
+
+    const results = await Promise.allSettled(
+      homes.map((home, i) =>
+        members.add(home.id, owners[i].id, 'bob@example.com'),
+      ),
+    );
+
+    expect(results.map((r) => r.status)).toEqual(
+      Array(POOL_SIZE).fill('fulfilled'),
+    );
+    for (const home of homes) {
+      expect(await memberCount(home.id)).toBe(2);
+    }
+  }, 15_000);
+
   it('answers 404, never a database error, when the account is deleted while a member is being added', async () => {
     // Several rounds, so an unlocked version would almost surely interleave.
     for (let round = 0; round < 10; round++) {
