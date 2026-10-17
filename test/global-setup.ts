@@ -13,7 +13,7 @@ let container: StartedPostgreSqlContainer | undefined;
  * have drifted apart. Shared by the integration and e2e test runs.
  */
 export async function setup(project: TestProject): Promise<void> {
-  container = await new PostgreSqlContainer('postgres:17-alpine').start();
+  container = await new PostgreSqlContainer('postgres:18-alpine').start();
   const dbEnv = {
     DB_HOST: container.getHost(),
     DB_PORT: String(container.getPort()),
