@@ -4,12 +4,15 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Param,
+  ParseUUIDPipe,
   Post,
 } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiBearerAuth,
   ApiCreatedResponse,
+  ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
@@ -18,6 +21,7 @@ import {
 import type { AuthContext } from '../auth/auth-context.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
 import { AccountsService } from './accounts.service.js';
+import { AccountDetailsDto } from './dto/account-details.dto.js';
 import { AccountNameDto } from './dto/account-name.dto.js';
 import { AccountResponseDto } from './dto/account-response.dto.js';
 
@@ -54,5 +58,20 @@ export class AccountsController {
     return AccountResponseDto.from(
       await this.accounts.create(auth.userId, dto.name),
     );
+  }
+
+  @Get(':id')
+  @ApiOperation({ summary: 'Get an account and its members' })
+  @ApiOkResponse({ type: AccountDetailsDto })
+  @ApiBadRequestResponse({ description: 'The id is not a UUID' })
+  @ApiNotFoundResponse({
+    description: 'No such account, or the current user is not a member',
+  })
+  async details(
+    @CurrentUser() auth: AuthContext,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<AccountDetailsDto> {
+    const { account, members } = await this.accounts.details(id, auth.userId);
+    return AccountDetailsDto.withMembers(account, members);
   }
 }

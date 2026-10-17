@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import {
@@ -96,6 +97,54 @@ describe('accounts (e2e)', () => {
         .post('/accounts')
         .send({ name: 'Home' })
         .expect(401);
+    });
+  });
+
+  describe('GET /accounts/:id', () => {
+    it('returns the account with its members', async () => {
+      const registered = await registerUser(app);
+      const ana = asUser(app, registered.accessToken);
+      const { id } = (await ana.post('/accounts').send({ name: 'Home' }))
+        .body as AccountBody;
+
+      const res = await ana.get(`/accounts/${id}`).expect(200);
+
+      expect(res.body).toEqual({
+        id,
+        name: 'Home',
+        isPersonal: false,
+        createdAt: expect.any(String),
+        updatedAt: expect.any(String),
+        members: [
+          {
+            userId: registered.user.id,
+            displayName: 'Ana',
+            email: 'ana@example.com',
+            joinedAt: expect.any(String),
+          },
+        ],
+      });
+    });
+
+    it("answers 404 for someone else's account and for an unknown id", async () => {
+      const ana = asUser(
+        app,
+        (await registerUser(app, 'ana@example.com')).accessToken,
+      );
+      const bob = asUser(
+        app,
+        (await registerUser(app, 'bob@example.com')).accessToken,
+      );
+      const { id } = (await ana.post('/accounts').send({ name: 'Home' }))
+        .body as AccountBody;
+
+      await bob.get(`/accounts/${id}`).expect(404);
+      await bob.get(`/accounts/${randomUUID()}`).expect(404);
+    });
+
+    it('answers 400 for an id that is not a UUID', async () => {
+      const ana = asUser(app, (await registerUser(app)).accessToken);
+      await ana.get('/accounts/not-a-uuid').expect(400);
     });
   });
 });
