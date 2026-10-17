@@ -26,7 +26,7 @@ describe('compareAccounts', () => {
     expect(
       accounts
         .sort(compareAccounts)
-        .map((a) => `${a.name} ${a.createdAt.getDate()}`),
+        .map((a) => `${a.name} ${a.createdAt.getUTCDate()}`),
     ).toEqual(['Personal 4', 'Apartment 5', 'home 2', 'Home 3', 'zoo 1']);
   });
 });
