@@ -102,6 +102,10 @@ describe('AccountMembersService (integration)', () => {
       ]);
 
       expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      const rejected = results.find(
+        (r): r is PromiseRejectedResult => r.status === 'rejected',
+      );
+      expect(rejected?.reason).toBeInstanceOf(NotFoundException);
       expect(await memberCount(home.id)).toBe(1);
     }
   });
