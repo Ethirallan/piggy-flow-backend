@@ -1,11 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, QueryFailedError, Repository } from 'typeorm';
+import { EntityManager, Repository } from 'typeorm';
+import { isUniqueViolation } from '../common/db-errors.js';
 import { EmailTakenError } from './email-taken.error.js';
 import { normalizeEmail } from './normalize-email.js';
 import { User } from './user.entity.js';
-
-const UNIQUE_VIOLATION = '23505';
 
 export interface CreateUserInput {
   email: string;
@@ -66,11 +65,4 @@ export class UsersService {
   private repository(manager?: EntityManager): Repository<User> {
     return manager ? manager.getRepository(User) : this.users;
   }
-}
-
-function isUniqueViolation(error: unknown): boolean {
-  return (
-    error instanceof QueryFailedError &&
-    (error.driverError as { code?: unknown }).code === UNIQUE_VIOLATION
-  );
 }
