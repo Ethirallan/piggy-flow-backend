@@ -137,4 +137,29 @@ describe('ShopsService (integration)', () => {
     ).rejects.toThrow(new NotFoundException('Shop not found'));
     expect(await shopCount()).toBe(0);
   });
+
+  it("doesn't wait for a member change that holds the account's lock", async () => {
+    const ana = await createUser();
+    const home = await accounts.create(ana.id, 'Home');
+    // Stands in for a rename or member change in progress on the account.
+    const memberChange = dataSource.createQueryRunner();
+    await memberChange.connect();
+    await memberChange.startTransaction();
+    let created: Promise<unknown> = Promise.resolve();
+    try {
+      await accounts.lockForMember(home.id, ana.id, memberChange.manager);
+
+      created = shops.create(home.id, ana.id, 'Lidl');
+      const outcome = await Promise.race([
+        created.then(() => 'created'),
+        new Promise((resolve) => setTimeout(resolve, 2_000, 'waited')),
+      ]);
+
+      expect(outcome).toBe('created');
+    } finally {
+      await memberChange.rollbackTransaction();
+      await memberChange.release();
+      await created;
+    }
+  });
 });
