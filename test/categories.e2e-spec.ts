@@ -151,7 +151,6 @@ describe('categories (e2e)', () => {
     });
 
     it.each([
-      ['an empty body', {}],
       ['a null name', { name: null }],
       ['a blank name', { name: ' ' }],
       ['two emojis', { emoji: '🛒🛒' }],
@@ -171,6 +170,41 @@ describe('categories (e2e)', () => {
       expect(
         (await categories(ana, accountId)).map((c) => [c.name, c.emoji]),
       ).toEqual([['Food', '🛒']]);
+    });
+
+    it('answers 400 "Nothing to update" for an empty body and changes nothing', async () => {
+      const ana = asUser(app, (await registerUser(app)).accessToken);
+      const accountId = await personalAccountId(ana);
+      const id = await createCategory(ana, accountId, {
+        name: 'Food',
+        emoji: '🛒',
+      });
+
+      const res = await ana
+        .patch(`/accounts/${accountId}/categories/${id}`)
+        .send({})
+        .expect(400);
+
+      expect(res.body.message).toBe('Nothing to update');
+      expect(
+        (await categories(ana, accountId)).map((c) => [c.name, c.emoji]),
+      ).toEqual([['Food', '🛒']]);
+    });
+
+    it('renames a category to its own name in another case', async () => {
+      const ana = asUser(app, (await registerUser(app)).accessToken);
+      const accountId = await personalAccountId(ana);
+      const id = await createCategory(ana, accountId, {
+        name: 'food',
+        emoji: '🛒',
+      });
+
+      const res = await ana
+        .patch(`/accounts/${accountId}/categories/${id}`)
+        .send({ name: 'Food' })
+        .expect(200);
+
+      expect(res.body).toMatchObject({ name: 'Food', emoji: '🛒' });
     });
 
     it('answers 409 when renaming to a name the account already has in another case', async () => {
