@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { NotFoundException } from '@nestjs/common';
 import type { TestingModule } from '@nestjs/testing';
 import { DataSource } from 'typeorm';
 import { createIntegrationModule, truncateTables } from '../../test/db.js';
@@ -79,6 +81,38 @@ describe('AccountsService (integration)', () => {
         dataSource.getRepository(AccountMember).count(),
       ).resolves.toBe(0);
       await expect(dataSource.getRepository(Account).count()).resolves.toBe(1);
+    });
+  });
+
+  describe('findForMember and details', () => {
+    it('returns the account and its members in the order they joined', async () => {
+      const ana = await createUser('ana@example.com');
+      const bob = await createUser('bob@example.com');
+      const account = await accounts.create(ana.id, 'Home');
+      await dataSource
+        .getRepository(AccountMember)
+        .insert({ accountId: account.id, userId: bob.id });
+
+      const details = await accounts.details(account.id, bob.id);
+
+      expect(details.account).toMatchObject({ id: account.id, name: 'Home' });
+      expect(details.members.map((m) => m.user?.email)).toEqual([
+        'ana@example.com',
+        'bob@example.com',
+      ]);
+    });
+
+    it('answers 404 to a user who is not a member, and for an unknown id', async () => {
+      const ana = await createUser('ana@example.com');
+      const bob = await createUser('bob@example.com');
+      const account = await accounts.create(ana.id, 'Home');
+
+      await expect(
+        accounts.findForMember(account.id, bob.id),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      await expect(
+        accounts.findForMember(randomUUID(), ana.id),
+      ).rejects.toBeInstanceOf(NotFoundException);
     });
   });
 });
