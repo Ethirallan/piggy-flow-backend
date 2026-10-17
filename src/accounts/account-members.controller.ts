@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   HttpCode,
   HttpStatus,
   Param,
@@ -13,6 +14,7 @@ import {
   ApiBearerAuth,
   ApiConflictResponse,
   ApiCreatedResponse,
+  ApiNoContentResponse,
   ApiNotFoundResponse,
   ApiOperation,
   ApiTags,
@@ -61,5 +63,28 @@ export class AccountMembersController {
   ): Promise<MemberResponseDto> {
     const { member, user } = await this.members.add(id, auth.userId, dto.email);
     return MemberResponseDto.from(member, user);
+  }
+
+  @Delete(':userId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary:
+      'Remove a member, or leave the account when userId is the current user',
+  })
+  @ApiNoContentResponse({ description: 'Removed' })
+  @ApiBadRequestResponse({ description: 'An id is not a UUID' })
+  @ApiNotFoundResponse({
+    description:
+      'No such account, the current user is not a member, or the user is not a member',
+  })
+  @ApiConflictResponse({
+    description: 'The account is Personal, or this is its last member',
+  })
+  remove(
+    @CurrentUser() auth: AuthContext,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('userId', ParseUUIDPipe) userId: string,
+  ): Promise<void> {
+    return this.members.remove(id, auth.userId, userId);
   }
 }

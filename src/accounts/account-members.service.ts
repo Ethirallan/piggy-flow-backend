@@ -48,4 +48,35 @@ export class AccountMembersService {
       return { member, user };
     });
   }
+
+  /** Removes `userId`; when that's the caller, they leave. */
+  async remove(
+    accountId: string,
+    callerId: string,
+    userId: string,
+  ): Promise<void> {
+    await this.dataSource.transaction(async (manager) => {
+      const account = await this.accounts.lockForMember(
+        accountId,
+        callerId,
+        manager,
+      );
+      if (account.isPersonal) {
+        throw new ConflictException(
+          "Members can't leave or be removed from the Personal account",
+        );
+      }
+      const members = manager.getRepository(AccountMember);
+      if (!(await members.existsBy({ accountId, userId }))) {
+        throw new NotFoundException('Not a member of this account');
+      }
+      // An account always keeps at least one member.
+      if ((await members.countBy({ accountId })) === 1) {
+        throw new ConflictException(
+          "The last member can't leave; delete the account instead",
+        );
+      }
+      await members.delete({ accountId, userId });
+    });
+  }
 }

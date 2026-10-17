@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { INestApplication } from '@nestjs/common';
 import {
   asUser,
@@ -126,6 +127,91 @@ describe('account members (e2e)', () => {
         .post(`/accounts/${homeId}/members`)
         .send({ email: 'not-an-email' })
         .expect(400);
+    });
+  });
+
+  describe('DELETE /accounts/:id/members/:userId', () => {
+    const share = async (asAna: ReturnType<typeof asUser>, homeId: string) => {
+      await asAna
+        .post(`/accounts/${homeId}/members`)
+        .send({ email: 'bob@example.com' })
+        .expect(201);
+    };
+
+    it('lets a member leave; the account is gone for them and 404 from then on', async () => {
+      const { bob, asAna, asBob, homeId } = await setupHome();
+      await share(asAna, homeId);
+
+      await asBob
+        .delete(`/accounts/${homeId}/members/${bob.user.id}`)
+        .expect(204);
+
+      const bobsAccounts = (await asBob.get('/accounts')).body as {
+        name: string;
+      }[];
+      expect(bobsAccounts.map((a) => a.name)).toEqual(['Personal']);
+      await asBob.get(`/accounts/${homeId}`).expect(404);
+      await asBob
+        .patch(`/accounts/${homeId}`)
+        .send({ name: 'Mine' })
+        .expect(404);
+      expect(await memberEmails(asAna, homeId)).toEqual(['ana@example.com']);
+    });
+
+    it('lets a member remove another member', async () => {
+      const { ana, asAna, asBob, homeId } = await setupHome();
+      await share(asAna, homeId);
+
+      await asBob
+        .delete(`/accounts/${homeId}/members/${ana.user.id}`)
+        .expect(204);
+
+      expect(await memberEmails(asBob, homeId)).toEqual(['bob@example.com']);
+    });
+
+    it('answers 409 for the last member, who can delete the account instead', async () => {
+      const { ana, asAna, homeId } = await setupHome();
+
+      const res = await asAna
+        .delete(`/accounts/${homeId}/members/${ana.user.id}`)
+        .expect(409);
+
+      expect(res.body.message).toBe(
+        "The last member can't leave; delete the account instead",
+      );
+      await asAna.delete(`/accounts/${homeId}`).expect(204);
+    });
+
+    it('answers 409 for leaving the Personal account', async () => {
+      const { ana, asAna } = await setupHome();
+      const [personal] = (await asAna.get('/accounts')).body as {
+        id: string;
+      }[];
+
+      await asAna
+        .delete(`/accounts/${personal.id}/members/${ana.user.id}`)
+        .expect(409);
+    });
+
+    it('answers 404 for a user who is not a member, and when the caller is not one', async () => {
+      const { ana, bob, asAna, asBob, homeId } = await setupHome();
+
+      await asAna
+        .delete(`/accounts/${homeId}/members/${bob.user.id}`)
+        .expect(404);
+      await asAna
+        .delete(`/accounts/${homeId}/members/${randomUUID()}`)
+        .expect(404);
+      await asBob
+        .delete(`/accounts/${homeId}/members/${ana.user.id}`)
+        .expect(404);
+      expect(await memberEmails(asAna, homeId)).toEqual(['ana@example.com']);
+    });
+
+    it('answers 400 for a user id that is not a UUID', async () => {
+      const { asAna, homeId } = await setupHome();
+
+      await asAna.delete(`/accounts/${homeId}/members/123`).expect(400);
     });
   });
 });
