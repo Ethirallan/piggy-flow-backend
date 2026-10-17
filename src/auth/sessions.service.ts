@@ -1,7 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, Not, Repository } from 'typeorm';
+import { EntityManager, LessThan, Not, Repository } from 'typeorm';
 import { Session } from './session.entity.js';
 import { TokenService } from './token.service.js';
 
@@ -36,7 +36,10 @@ export class SessionsService {
     private readonly tokens: TokenService,
   ) {}
 
-  /** Pass `manager` to run inside that transaction. */
+  /**
+   * Starts a session and clears the user's expired ones, so abandoned devices
+   * don't pile up. Pass `manager` to run inside that transaction.
+   */
   async create(
     userId: string,
     manager?: EntityManager,
@@ -44,6 +47,7 @@ export class SessionsService {
     const sessions = this.repository(manager);
     const secret = this.tokens.createRefreshSecret();
     const now = new Date();
+    await sessions.delete({ userId, expiresAt: LessThan(now) });
     const session = await sessions.save(
       sessions.create({
         userId,

@@ -61,6 +61,23 @@ describe('SessionsService (integration)', () => {
     );
   });
 
+  it("clears the user's expired sessions when a new one starts, and only theirs", async () => {
+    const expired = await service.create(userId);
+    const active = await service.create(userId);
+    const bob = await createUser('bob@example.com');
+    const bobExpired = await service.create(bob.id);
+    const past = new Date(Date.now() - 1_000);
+    await sessions.update({ id: expired.sessionId }, { expiresAt: past });
+    await sessions.update({ id: bobExpired.sessionId }, { expiresAt: past });
+
+    const fresh = await service.create(userId);
+
+    const ids = (await sessions.find()).map((row) => row.id).sort();
+    expect(ids).toEqual(
+      [active.sessionId, bobExpired.sessionId, fresh.sessionId].sort(),
+    );
+  });
+
   it('rotates a valid token and keeps the session when the old one comes back right away', async () => {
     const { sessionId, refreshToken } = await service.create(userId);
 
