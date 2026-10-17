@@ -34,25 +34,29 @@ describe('AccountMembersService (integration)', () => {
   beforeEach(() => truncateTables(dataSource));
 
   it('adds one membership when the same user is added twice at once', async () => {
-    const ana = await createUser('ana@example.com');
-    await createUser('bob@example.com');
-    const home = await accounts.create(ana.id, 'Home');
+    // Several rounds, so an unlocked version would almost surely interleave.
+    for (let round = 0; round < 10; round++) {
+      await truncateTables(dataSource);
+      const ana = await createUser('ana@example.com');
+      await createUser('bob@example.com');
+      const home = await accounts.create(ana.id, 'Home');
 
-    const results = await Promise.allSettled([
-      members.add(home.id, ana.id, 'bob@example.com'),
-      members.add(home.id, ana.id, 'bob@example.com'),
-    ]);
+      const results = await Promise.allSettled([
+        members.add(home.id, ana.id, 'bob@example.com'),
+        members.add(home.id, ana.id, 'bob@example.com'),
+      ]);
 
-    expect(results.map((r) => r.status).sort()).toEqual([
-      'fulfilled',
-      'rejected',
-    ]);
-    // A 409, not a duplicate-key error from the database (a 500).
-    const rejected = results.find(
-      (r): r is PromiseRejectedResult => r.status === 'rejected',
-    );
-    expect(rejected?.reason).toBeInstanceOf(ConflictException);
-    expect(await memberCount(home.id)).toBe(2);
+      expect(results.map((r) => r.status).sort()).toEqual([
+        'fulfilled',
+        'rejected',
+      ]);
+      // A 409, not a duplicate-key error from the database (a 500).
+      const rejected = results.find(
+        (r): r is PromiseRejectedResult => r.status === 'rejected',
+      );
+      expect(rejected?.reason).toBeInstanceOf(ConflictException);
+      expect(await memberCount(home.id)).toBe(2);
+    }
   });
 
   it('answers 404, never a database error, when the account is deleted while a member is being added', async () => {
