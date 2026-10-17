@@ -24,8 +24,8 @@ import {
 import { Throttle } from '@nestjs/throttler';
 import type { AuthContext } from '../auth/auth-context.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
-import { LoggingThrottlerGuard } from '../auth/logging-throttler.guard.js';
-import { ACCOUNT_RATE_LIMITS } from '../auth/rate-limits.js';
+import { LoggingThrottlerGuard } from '../rate-limit/logging-throttler.guard.js';
+import { ACCOUNT_RATE_LIMITS } from '../rate-limit/rate-limits.js';
 import { AccountMembersService } from './account-members.service.js';
 import { AddMemberDto } from './dto/add-member.dto.js';
 import { MemberResponseDto } from './dto/member-response.dto.js';

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { RateLimitModule } from '../rate-limit/rate-limit.module.js';
 import { UsersModule } from '../users/users.module.js';
 import { AccountMember } from './account-member.entity.js';
 import { AccountMembersController } from './account-members.controller.js';
@@ -9,7 +10,11 @@ import { AccountsController } from './accounts.controller.js';
 import { AccountsService } from './accounts.service.js';
 
 @Module({
-  imports: [UsersModule, TypeOrmModule.forFeature([Account, AccountMember])],
+  imports: [
+    UsersModule,
+    RateLimitModule,
+    TypeOrmModule.forFeature([Account, AccountMember]),
+  ],
   controllers: [AccountsController, AccountMembersController],
   providers: [AccountsService, AccountMembersService],
   exports: [AccountsService],

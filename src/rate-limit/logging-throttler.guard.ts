@@ -13,7 +13,7 @@ export class LoggingThrottlerGuard extends ThrottlerGuard {
   ): Promise<void> {
     const request = context.switchToHttp().getRequest<Request>();
     this.rateLimitLogger.warn({
-      event: 'auth.rate_limited',
+      event: 'rate_limited',
       ip: request.ip,
       path: request.path,
     });

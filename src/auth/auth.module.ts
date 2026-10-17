@@ -2,9 +2,9 @@ import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
-import { ThrottlerModule } from '@nestjs/throttler';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AccountsModule } from '../accounts/accounts.module.js';
+import { RateLimitModule } from '../rate-limit/rate-limit.module.js';
 import { UsersModule } from '../users/users.module.js';
 import { AuthController } from './auth.controller.js';
 import { AuthGuard } from './auth.guard.js';
@@ -20,11 +20,7 @@ import { TokenService } from './token.service.js';
     UsersModule,
     AccountsModule,
     TypeOrmModule.forFeature([Session]),
-    ThrottlerModule.forRoot({
-      // Applied per route with @UseGuards(LoggingThrottlerGuard) and @Throttle(...).
-      throttlers: [{ limit: 10, ttl: 60_000 }],
-      skipIf: () => process.env.RATE_LIMIT_DISABLED === 'true',
-    }),
+    RateLimitModule,
     JwtModule.registerAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) =>
