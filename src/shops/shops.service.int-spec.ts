@@ -49,11 +49,11 @@ describe('ShopsService (integration)', () => {
     const bob = await createUser('bob@example.com');
     const home = await accounts.create(ana.id, 'Home');
 
-    await expect(shops.list(home.id, bob.id)).rejects.toBeInstanceOf(
-      NotFoundException,
+    await expect(shops.list(home.id, bob.id)).rejects.toThrow(
+      new NotFoundException('Account not found'),
     );
-    await expect(shops.create(home.id, bob.id, 'Lidl')).rejects.toBeInstanceOf(
-      NotFoundException,
+    await expect(shops.create(home.id, bob.id, 'Lidl')).rejects.toThrow(
+      new NotFoundException('Account not found'),
     );
     expect(await shopCount()).toBe(0);
   });
@@ -118,7 +118,9 @@ describe('ShopsService (integration)', () => {
 
       expect(deleted.status).toBe('fulfilled');
       if (created.status === 'rejected') {
-        expect(created.reason).toBeInstanceOf(NotFoundException);
+        expect(created.reason).toEqual(
+          new NotFoundException('Account not found'),
+        );
       }
       expect(await shopCount()).toBe(0);
     }
