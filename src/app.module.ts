@@ -8,6 +8,7 @@ import { validateEnv } from './config/env.validation.js';
 import { dataSourceOption } from './database-source.js';
 import { buildLoggerParams } from './logging/logger-params.js';
 import { UsersModule } from './users/users.module.js';
+import { AccountsModule } from './accounts/accounts.module.js';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { UsersModule } from './users/users.module.js';
       autoLoadEntities: true,
     }),
     UsersModule,
+    AccountsModule,
     AuthModule,
   ],
   controllers: [AppController],
