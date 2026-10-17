@@ -19,6 +19,14 @@ export const dataSourceOption: DataSourceOptions = {
   uuidExtension: 'pgcrypto',
   synchronize: false,
   migrationsRun: true,
+  // Fail instead of hanging: waiting for a pool connection (also when all are
+  // checked out), one slow query, a row lock wait, a transaction left open.
+  connectTimeoutMS: 10_000,
+  extra: {
+    statement_timeout: 30_000,
+    lock_timeout: 10_000,
+    idle_in_transaction_session_timeout: 60_000,
+  },
 };
 
 export default new DataSource(dataSourceOption);
