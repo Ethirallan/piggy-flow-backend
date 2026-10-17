@@ -115,4 +115,17 @@ describe('AccountsService (integration)', () => {
       ).rejects.toBeInstanceOf(NotFoundException);
     });
   });
+
+  describe('rename', () => {
+    it('answers 404 after the account is deleted and does not re-create it', async () => {
+      const user = await createUser();
+      const account = await accounts.create(user.id, 'Home');
+      await accounts.delete(account.id, user.id);
+
+      await expect(
+        accounts.rename(account.id, user.id, 'Mine'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      await expect(dataSource.getRepository(Account).count()).resolves.toBe(0);
+    });
+  });
 });
