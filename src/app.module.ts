@@ -11,6 +11,7 @@ import { UsersModule } from './users/users.module.js';
 import { AccountsModule } from './accounts/accounts.module.js';
 import { ShopsModule } from './shops/shops.module.js';
 import { CategoriesModule } from './categories/categories.module.js';
+import { BillsModule } from './bills/bills.module.js';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { CategoriesModule } from './categories/categories.module.js';
     AccountsModule,
     ShopsModule,
     CategoriesModule,
+    BillsModule,
     AuthModule,
   ],
   controllers: [AppController],
