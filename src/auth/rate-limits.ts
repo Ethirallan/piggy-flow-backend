@@ -9,3 +9,8 @@ export const AUTH_RATE_LIMITS = {
   // Apps refresh often, and several devices can share one IP.
   refresh: { default: { limit: 30, ttl: MINUTE_MS } },
 };
+
+/** Per-IP limit on adding account members, which reveals whether an email is registered. */
+export const ACCOUNT_RATE_LIMITS = {
+  addMember: { default: { limit: 10, ttl: MINUTE_MS } },
+};

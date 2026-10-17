@@ -1,6 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import {
+  asUser,
   createTestApp,
   DEFAULT_PASSWORD,
   registerUser,
@@ -48,6 +49,21 @@ describe('rate limits (e2e)', () => {
         await changePassword().expect(403);
       }
       await changePassword().expect(429);
+    });
+
+    it('allows 10 member additions per minute, then answers 429', async () => {
+      const { accessToken } = await registerUser(app, 'adder@example.com');
+      const adder = asUser(app, accessToken);
+      const home = await adder.post('/accounts').send({ name: 'Home' });
+      const addMember = (email: string) =>
+        adder
+          .post(`/accounts/${(home.body as { id: string }).id}/members`)
+          .send({ email });
+
+      for (let attempt = 0; attempt < 10; attempt++) {
+        await addMember(`nobody${attempt}@example.com`).expect(404);
+      }
+      await addMember('nobody@example.com').expect(429);
     });
 
     it('does not limit other routes', async () => {

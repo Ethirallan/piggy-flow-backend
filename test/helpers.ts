@@ -56,10 +56,11 @@ export interface RegisteredUser {
 export async function registerUser(
   app: INestApplication,
   email = 'ana@example.com',
+  displayName = 'Ana',
 ): Promise<RegisteredUser> {
   const res = await request(app.getHttpServer())
     .post('/auth/register')
-    .send({ email, password: DEFAULT_PASSWORD, displayName: 'Ana' })
+    .send({ email, password: DEFAULT_PASSWORD, displayName })
     .expect(201);
   return {
     ...(res.body as Omit<RegisteredUser, 'password'>),
