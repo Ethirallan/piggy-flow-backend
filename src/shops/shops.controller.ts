@@ -1,11 +1,13 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
 } from '@nestjs/common';
 import {
@@ -13,6 +15,7 @@ import {
   ApiBearerAuth,
   ApiConflictResponse,
   ApiCreatedResponse,
+  ApiNoContentResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
@@ -72,5 +75,46 @@ export class ShopsController {
     return ShopResponseDto.from(
       await this.shops.create(accountId, auth.userId, dto.name),
     );
+  }
+
+  @Patch(':id')
+  @ApiOperation({ summary: 'Rename a shop' })
+  @ApiOkResponse({ type: ShopResponseDto })
+  @ApiBadRequestResponse({
+    description: 'An id is not a UUID, or the body failed validation',
+  })
+  @ApiNotFoundResponse({
+    description:
+      'No such account, the current user is not a member, or the shop is not in this account',
+  })
+  @ApiConflictResponse({
+    description: 'The account already has a shop with that name',
+  })
+  async rename(
+    @CurrentUser() auth: AuthContext,
+    @Param('accountId', ParseUUIDPipe) accountId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ShopNameDto,
+  ): Promise<ShopResponseDto> {
+    return ShopResponseDto.from(
+      await this.shops.rename(accountId, auth.userId, id, dto.name),
+    );
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Delete a shop' })
+  @ApiNoContentResponse({ description: 'Deleted' })
+  @ApiBadRequestResponse({ description: 'An id is not a UUID' })
+  @ApiNotFoundResponse({
+    description:
+      'No such account, the current user is not a member, or the shop is not in this account',
+  })
+  delete(
+    @CurrentUser() auth: AuthContext,
+    @Param('accountId', ParseUUIDPipe) accountId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<void> {
+    return this.shops.delete(accountId, auth.userId, id);
   }
 }
