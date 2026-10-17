@@ -6,6 +6,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import { AccountsService } from '../accounts/accounts.service.js';
 import { UserResponseDto } from '../users/dto/user-response.dto.js';
 import { EmailTakenError } from '../users/email-taken.error.js';
 import type { User } from '../users/user.entity.js';
@@ -31,6 +32,7 @@ export class AuthService {
     private readonly passwords: PasswordService,
     private readonly tokens: TokenService,
     private readonly sessions: SessionsService,
+    private readonly accounts: AccountsService,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -38,8 +40,9 @@ export class AuthService {
     const passwordHash = await this.passwords.hash(dto.password);
     let created: { user: User; session: IssuedSession };
     try {
-      // User and session together, so a failed session doesn't leave an
-      // account behind that the next attempt would see as "already registered".
+      // User, Personal account and session together, so a failure part-way
+      // doesn't leave a user behind that the next attempt would see as
+      // "already registered".
       created = await this.dataSource.transaction(async (manager) => {
         const user = await this.users.create(
           {
@@ -49,6 +52,7 @@ export class AuthService {
           },
           manager,
         );
+        await this.accounts.createPersonal(user.id, manager);
         return { user, session: await this.sessions.create(user.id, manager) };
       });
     } catch (error) {
