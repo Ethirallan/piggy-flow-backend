@@ -39,7 +39,10 @@ describe('rate limits (e2e)', () => {
         request(app.getHttpServer())
           .post('/auth/change-password')
           .set('Authorization', `Bearer ${accessToken}`)
-          .send({ currentPassword: 'not my password', newPassword: DEFAULT_PASSWORD });
+          .send({
+            currentPassword: 'not my password',
+            newPassword: DEFAULT_PASSWORD,
+          });
 
       for (let attempt = 0; attempt < 5; attempt++) {
         await changePassword().expect(403);

@@ -219,6 +219,25 @@ describe('AuthService', () => {
       );
     });
 
+    it('answers 401 without a warning for a token that was just rotated', async () => {
+      const { service, sessions } = setup();
+      sessions.rotate.mockResolvedValue({
+        status: 'superseded',
+        userId: 'user-1',
+        sessionId: 'session-1',
+      });
+
+      await expect(service.refresh('just-rotated')).rejects.toThrow(
+        UnauthorizedException,
+      );
+      expect(log).toHaveBeenCalledWith({
+        event: 'auth.refresh_superseded',
+        userId: 'user-1',
+        sessionId: 'session-1',
+      });
+      expect(warn).not.toHaveBeenCalled();
+    });
+
     it('answers 401 and warns when a used token comes back', async () => {
       const { service, sessions } = setup();
       sessions.rotate.mockResolvedValue({

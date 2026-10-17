@@ -34,4 +34,16 @@ export class Session {
 
   @Column({ name: 'last_used_at', type: 'timestamptz' })
   lastUsedAt: Date;
+
+  /** Hash of the token the current one replaced, accepted (without effect) for a short grace window. */
+  @Column({
+    name: 'previous_token_hash',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
+  previousTokenHash: string | null;
+
+  @Column({ name: 'rotated_at', type: 'timestamptz', nullable: true })
+  rotatedAt: Date | null;
 }

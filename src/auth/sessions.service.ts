@@ -7,6 +7,12 @@ import { TokenService } from './token.service.js';
 
 export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
+/**
+ * How long the token a rotation replaced still gets a harmless 401 instead of
+ * ending the session. Covers a device whose requests raced or retried a refresh.
+ */
+export const REFRESH_GRACE_MS = 30_000;
+
 export interface IssuedSession {
   sessionId: string;
   refreshToken: string;
@@ -19,6 +25,7 @@ export interface SessionRef {
 
 export type RotateResult =
   | ({ status: 'rotated'; refreshToken: string } & SessionRef)
+  | ({ status: 'superseded' } & SessionRef)
   | ({ status: 'reused' } & SessionRef)
   | { status: 'invalid' };
 
@@ -47,17 +54,22 @@ export class SessionsService {
   }
 
   /**
-   * Swaps a refresh token for a new one. A token that was already rotated is
-   * treated as stolen: the session is deleted and the device must log in again.
+   * Swaps a refresh token for a new one. The token the last rotation replaced
+   * gets `superseded` for REFRESH_GRACE_MS (a racing or retried request from
+   * the same device). Any other old token is treated as stolen: the session
+   * is deleted and the device must log in again.
    */
   async rotate(refreshToken: string): Promise<RotateResult> {
     const found = await this.findByToken(refreshToken);
     if (!found || found.session.expiresAt.getTime() <= Date.now()) {
       return { status: 'invalid' };
     }
-    const { session, matches } = found;
+    const { session, match } = found;
     const ref = { userId: session.userId, sessionId: session.id };
-    if (!matches) {
+    if (match === 'previous' && withinGrace(session.rotatedAt)) {
+      return { status: 'superseded', ...ref };
+    }
+    if (match !== 'current') {
       await this.sessions.delete({ id: session.id });
       return { status: 'reused', ...ref };
     }
@@ -69,6 +81,8 @@ export class SessionsService {
       { id: session.id, tokenHash: session.tokenHash },
       {
         tokenHash: this.tokens.hashRefreshSecret(secret),
+        previousTokenHash: session.tokenHash,
+        rotatedAt: now,
         expiresAt: expiryFrom(now),
         lastUsedAt: now,
       },
@@ -86,7 +100,7 @@ export class SessionsService {
   /** Deletes the session the token belongs to, if the token is its current one. */
   async revoke(refreshToken: string): Promise<SessionRef | null> {
     const found = await this.findByToken(refreshToken);
-    if (!found?.matches) {
+    if (found?.match !== 'current') {
       return null;
     }
     await this.sessions.delete({ id: found.session.id });
@@ -101,7 +115,10 @@ export class SessionsService {
     await this.sessions.delete({ userId, id: Not(keepSessionId) });
   }
 
-  /** Gives an existing session a new refresh secret, e.g. after a password change. */
+  /**
+   * Gives an existing session a new refresh secret, e.g. after a password
+   * change. Unlike a rotation, the replaced token gets no grace window.
+   */
   async reissue(sessionId: string): Promise<string | null> {
     const secret = this.tokens.createRefreshSecret();
     const now = new Date();
@@ -109,6 +126,8 @@ export class SessionsService {
       { id: sessionId },
       {
         tokenHash: this.tokens.hashRefreshSecret(secret),
+        previousTokenHash: null,
+        rotatedAt: null,
         expiresAt: expiryFrom(now),
         lastUsedAt: now,
       },
@@ -120,7 +139,7 @@ export class SessionsService {
 
   private async findByToken(
     refreshToken: string,
-  ): Promise<{ session: Session; matches: boolean } | null> {
+  ): Promise<{ session: Session; match: TokenMatch } | null> {
     const parsed = this.tokens.parseRefreshToken(refreshToken);
     if (!parsed) {
       return null;
@@ -130,8 +149,25 @@ export class SessionsService {
       return null;
     }
     const presented = this.tokens.hashRefreshSecret(parsed.secret);
-    return { session, matches: hashesMatch(presented, session.tokenHash) };
+    if (hashesMatch(presented, session.tokenHash)) {
+      return { session, match: 'current' };
+    }
+    if (
+      session.previousTokenHash &&
+      hashesMatch(presented, session.previousTokenHash)
+    ) {
+      return { session, match: 'previous' };
+    }
+    return { session, match: 'none' };
   }
+}
+
+type TokenMatch = 'current' | 'previous' | 'none';
+
+function withinGrace(rotatedAt: Date | null): boolean {
+  return (
+    rotatedAt !== null && Date.now() - rotatedAt.getTime() < REFRESH_GRACE_MS
+  );
 }
 
 function expiryFrom(now: Date): Date {
