@@ -151,6 +151,20 @@ describe('shops (e2e)', () => {
       expect(await shopNames(ana, accountId)).toEqual(['Lidl Center']);
     });
 
+    it('renames a shop to its own name in another case', async () => {
+      const ana = asUser(app, (await registerUser(app)).accessToken);
+      const accountId = await personalAccountId(ana);
+      const id = await createShop(ana, accountId, 'lidl');
+
+      const res = await ana
+        .patch(`/accounts/${accountId}/shops/${id}`)
+        .send({ name: 'Lidl' })
+        .expect(200);
+
+      expect(res.body).toMatchObject({ id, name: 'Lidl' });
+      expect(await shopNames(ana, accountId)).toEqual(['Lidl']);
+    });
+
     it('answers 409 when renaming to a name the account already has in another case', async () => {
       const ana = asUser(app, (await registerUser(app)).accessToken);
       const accountId = await personalAccountId(ana);

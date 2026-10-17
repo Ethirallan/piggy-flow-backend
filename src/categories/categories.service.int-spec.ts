@@ -127,4 +127,16 @@ describe('CategoriesService (integration)', () => {
       expect(await categoryCount()).toBe(0);
     }
   });
+
+  it('answers 404 when changing a category deleted meanwhile, and re-creates nothing', async () => {
+    const ana = await createUser();
+    const home = await accounts.create(ana.id, 'Home');
+    const category = await categories.create(home.id, ana.id, { name: 'Food' });
+    await categories.delete(home.id, ana.id, category.id);
+
+    await expect(
+      categories.update(home.id, ana.id, category.id, { emoji: '🛒' }),
+    ).rejects.toThrow(new NotFoundException('Category not found'));
+    expect(await categoryCount()).toBe(0);
+  });
 });
