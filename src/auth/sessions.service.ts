@@ -1,7 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Not, Repository } from 'typeorm';
+import { EntityManager, Not, Repository } from 'typeorm';
 import { Session } from './session.entity.js';
 import { TokenService } from './token.service.js';
 
@@ -36,11 +36,16 @@ export class SessionsService {
     private readonly tokens: TokenService,
   ) {}
 
-  async create(userId: string): Promise<IssuedSession> {
+  /** Pass `manager` to run inside that transaction. */
+  async create(
+    userId: string,
+    manager?: EntityManager,
+  ): Promise<IssuedSession> {
+    const sessions = this.repository(manager);
     const secret = this.tokens.createRefreshSecret();
     const now = new Date();
-    const session = await this.sessions.save(
-      this.sessions.create({
+    const session = await sessions.save(
+      sessions.create({
         userId,
         tokenHash: this.tokens.hashRefreshSecret(secret),
         expiresAt: expiryFrom(now),
@@ -111,18 +116,25 @@ export class SessionsService {
     await this.sessions.delete({ userId });
   }
 
-  async revokeAllExcept(userId: string, keepSessionId: string): Promise<void> {
-    await this.sessions.delete({ userId, id: Not(keepSessionId) });
+  async revokeAllExcept(
+    userId: string,
+    keepSessionId: string,
+    manager?: EntityManager,
+  ): Promise<void> {
+    await this.repository(manager).delete({ userId, id: Not(keepSessionId) });
   }
 
   /**
    * Gives an existing session a new refresh secret, e.g. after a password
    * change. Unlike a rotation, the replaced token gets no grace window.
    */
-  async reissue(sessionId: string): Promise<string | null> {
+  async reissue(
+    sessionId: string,
+    manager?: EntityManager,
+  ): Promise<string | null> {
     const secret = this.tokens.createRefreshSecret();
     const now = new Date();
-    const result = await this.sessions.update(
+    const result = await this.repository(manager).update(
       { id: sessionId },
       {
         tokenHash: this.tokens.hashRefreshSecret(secret),
@@ -135,6 +147,10 @@ export class SessionsService {
     return result.affected === 1
       ? this.tokens.formatRefreshToken(sessionId, secret)
       : null;
+  }
+
+  private repository(manager?: EntityManager): Repository<Session> {
+    return manager ? manager.getRepository(Session) : this.sessions;
   }
 
   private async findByToken(

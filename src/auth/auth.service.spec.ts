@@ -4,6 +4,7 @@ import {
   Logger,
   UnauthorizedException,
 } from '@nestjs/common';
+import type { DataSource, EntityManager } from 'typeorm';
 import type { MockInstance } from 'vitest';
 import { EmailTakenError } from '../users/email-taken.error.js';
 import type { User } from '../users/user.entity.js';
@@ -21,6 +22,9 @@ const user: User = {
   createdAt: new Date('2026-10-16T08:00:00Z'),
   updatedAt: new Date('2026-10-16T08:00:00Z'),
 };
+
+/** Stands in for the transaction's EntityManager, so tests can see which calls ran inside it. */
+const manager = { transactional: true } as unknown as EntityManager;
 
 function setup() {
   const users = {
@@ -46,11 +50,17 @@ function setup() {
     revokeAllExcept: vi.fn(),
     reissue: vi.fn(),
   };
+  const dataSource = {
+    transaction: vi.fn((work: (m: EntityManager) => Promise<unknown>) =>
+      work(manager),
+    ),
+  };
   const service = new AuthService(
     users as unknown as UsersService,
     passwords as unknown as PasswordService,
     tokens as unknown as TokenService,
     sessions as unknown as SessionsService,
+    dataSource as unknown as DataSource,
   );
   return { service, users, passwords, tokens, sessions };
 }
@@ -91,12 +101,15 @@ describe('AuthService', () => {
         },
       });
       expect(passwords.hash).toHaveBeenCalledWith('correct horse');
-      expect(users.create).toHaveBeenCalledWith({
-        email: 'ana@example.com',
-        displayName: 'Ana',
-        passwordHash: 'new-hash',
-      });
-      expect(sessions.create).toHaveBeenCalledWith('user-1');
+      expect(users.create).toHaveBeenCalledWith(
+        {
+          email: 'ana@example.com',
+          displayName: 'Ana',
+          passwordHash: 'new-hash',
+        },
+        manager,
+      );
+      expect(sessions.create).toHaveBeenCalledWith('user-1', manager);
       expect(tokens.signAccessToken).toHaveBeenCalledWith({
         sub: 'user-1',
         sid: 'session-1',
@@ -317,11 +330,14 @@ describe('AuthService', () => {
       expect(users.updatePasswordHash).toHaveBeenCalledWith(
         'user-1',
         'new-hash',
+        manager,
       );
       expect(sessions.revokeAllExcept).toHaveBeenCalledWith(
         'user-1',
         'session-1',
+        manager,
       );
+      expect(sessions.reissue).toHaveBeenCalledWith('session-1', manager);
     });
 
     it('answers 403 for a wrong current password and changes nothing', async () => {

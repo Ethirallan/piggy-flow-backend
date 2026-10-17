@@ -5,6 +5,7 @@ import {
   Logger,
   UnauthorizedException,
 } from '@nestjs/common';
+import { DataSource } from 'typeorm';
 import { UserResponseDto } from '../users/dto/user-response.dto.js';
 import { EmailTakenError } from '../users/email-taken.error.js';
 import type { User } from '../users/user.entity.js';
@@ -16,7 +17,7 @@ import type { LoginDto } from './dto/login.dto.js';
 import type { RegisterDto } from './dto/register.dto.js';
 import type { TokenPairDto } from './dto/token-pair.dto.js';
 import { PasswordService } from './password.service.js';
-import { SessionsService } from './sessions.service.js';
+import { type IssuedSession, SessionsService } from './sessions.service.js';
 import { TokenService } from './token.service.js';
 
 export const INVALID_CREDENTIALS = 'Invalid email or password';
@@ -30,16 +31,25 @@ export class AuthService {
     private readonly passwords: PasswordService,
     private readonly tokens: TokenService,
     private readonly sessions: SessionsService,
+    private readonly dataSource: DataSource,
   ) {}
 
   async register(dto: RegisterDto): Promise<AuthResponseDto> {
     const passwordHash = await this.passwords.hash(dto.password);
-    let user: User;
+    let created: { user: User; session: IssuedSession };
     try {
-      user = await this.users.create({
-        email: dto.email,
-        displayName: dto.displayName,
-        passwordHash,
+      // User and session together, so a failed session doesn't leave an
+      // account behind that the next attempt would see as "already registered".
+      created = await this.dataSource.transaction(async (manager) => {
+        const user = await this.users.create(
+          {
+            email: dto.email,
+            displayName: dto.displayName,
+            passwordHash,
+          },
+          manager,
+        );
+        return { user, session: await this.sessions.create(user.id, manager) };
       });
     } catch (error) {
       if (error instanceof EmailTakenError) {
@@ -48,11 +58,21 @@ export class AuthService {
       throw error;
     }
 
-    const { sessionId, accessToken, refreshToken } = await this.startSession(
-      user.id,
-    );
-    this.logger.log({ event: 'auth.registered', userId: user.id, sessionId });
-    return { accessToken, refreshToken, user: UserResponseDto.from(user) };
+    const { user, session } = created;
+    const accessToken = await this.tokens.signAccessToken({
+      sub: user.id,
+      sid: session.sessionId,
+    });
+    this.logger.log({
+      event: 'auth.registered',
+      userId: user.id,
+      sessionId: session.sessionId,
+    });
+    return {
+      accessToken,
+      refreshToken: session.refreshToken,
+      user: UserResponseDto.from(user),
+    };
   }
 
   async login(dto: LoginDto, ip: string | undefined): Promise<AuthResponseDto> {
@@ -130,16 +150,18 @@ export class AuthService {
     ) {
       throw new ForbiddenException('Current password is incorrect');
     }
-    // Renew first: if the current session is gone, nothing changes.
-    const refreshToken = await this.sessions.reissue(auth.sessionId);
-    if (!refreshToken) {
-      throw new UnauthorizedException();
-    }
-    await this.users.updatePasswordHash(
-      user.id,
-      await this.passwords.hash(dto.newPassword),
-    );
-    await this.sessions.revokeAllExcept(user.id, auth.sessionId);
+    const passwordHash = await this.passwords.hash(dto.newPassword);
+    // All or nothing: a failure part-way must not leave the new password set
+    // with other devices still signed in, or this device's token replaced.
+    const refreshToken = await this.dataSource.transaction(async (manager) => {
+      const reissued = await this.sessions.reissue(auth.sessionId, manager);
+      if (!reissued) {
+        throw new UnauthorizedException();
+      }
+      await this.users.updatePasswordHash(user.id, passwordHash, manager);
+      await this.sessions.revokeAllExcept(user.id, auth.sessionId, manager);
+      return reissued;
+    });
 
     this.logger.log({
       event: 'auth.password_changed',

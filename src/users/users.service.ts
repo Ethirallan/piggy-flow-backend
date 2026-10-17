@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { QueryFailedError, Repository } from 'typeorm';
+import { EntityManager, QueryFailedError, Repository } from 'typeorm';
 import { EmailTakenError } from './email-taken.error.js';
 import { normalizeEmail } from './normalize-email.js';
 import { User } from './user.entity.js';
@@ -27,14 +27,16 @@ export class UsersService {
     return this.users.findOneBy({ email: normalizeEmail(email) });
   }
 
-  async create(input: CreateUserInput): Promise<User> {
-    const user = this.users.create({
+  /** Pass `manager` to run inside that transaction. */
+  async create(input: CreateUserInput, manager?: EntityManager): Promise<User> {
+    const users = this.repository(manager);
+    const user = users.create({
       email: normalizeEmail(input.email),
       displayName: input.displayName.trim(),
       passwordHash: input.passwordHash,
     });
     try {
-      return await this.users.save(user);
+      return await users.save(user);
     } catch (error) {
       // The unique index is the final check, so a racing duplicate is a 409, not a 500.
       if (isUniqueViolation(error)) {
@@ -52,8 +54,16 @@ export class UsersService {
     return this.findById(id);
   }
 
-  async updatePasswordHash(id: string, passwordHash: string): Promise<void> {
-    await this.users.update({ id }, { passwordHash });
+  async updatePasswordHash(
+    id: string,
+    passwordHash: string,
+    manager?: EntityManager,
+  ): Promise<void> {
+    await this.repository(manager).update({ id }, { passwordHash });
+  }
+
+  private repository(manager?: EntityManager): Repository<User> {
+    return manager ? manager.getRepository(User) : this.users;
   }
 }
 
