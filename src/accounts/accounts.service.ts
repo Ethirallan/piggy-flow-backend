@@ -43,18 +43,23 @@ export class AccountsService {
   }
 
   /**
-   * Like findForMember, but locks the account row (FOR UPDATE) until
-   * `manager`'s transaction ends, so changes that depend on the member list
-   * can't interleave.
+   * Like findForMember, but locks the account row until `manager`'s
+   * transaction ends, so changes that depend on the member list can't
+   * interleave.
    */
   async lockForMember(
     accountId: string,
     userId: string,
     manager: EntityManager,
+    // FOR NO KEY UPDATE still serializes member changes with each other and
+    // with delete, but not with inserts of rows that reference the account
+    // (shops, categories), whose foreign-key check takes FOR KEY SHARE.
+    // Delete passes FOR UPDATE: it must wait for and block those inserts.
+    mode: 'for_no_key_update' | 'pessimistic_write' = 'for_no_key_update',
   ): Promise<Account> {
     const account = await manager.getRepository(Account).findOne({
       where: { id: accountId },
-      lock: { mode: 'pessimistic_write' },
+      lock: { mode },
     });
     return this.requireMember(
       account,
@@ -73,7 +78,12 @@ export class AccountsService {
 
   async delete(accountId: string, userId: string): Promise<void> {
     await this.dataSource.transaction(async (manager) => {
-      const account = await this.lockForMember(accountId, userId, manager);
+      const account = await this.lockForMember(
+        accountId,
+        userId,
+        manager,
+        'pessimistic_write',
+      );
       if (account.isPersonal) {
         throw new ConflictException("The Personal account can't be deleted");
       }
