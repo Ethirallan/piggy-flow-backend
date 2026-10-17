@@ -1,5 +1,6 @@
 import type { ModuleMetadata } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import type { DataSource } from 'typeorm';
 import { inject } from 'vitest';
@@ -25,6 +26,8 @@ export function createIntegrationModule(
         uuidExtension: 'pgcrypto',
         autoLoadEntities: true,
       }),
+      // Global, as in AuthModule: controllers' LoggingThrottlerGuard needs it.
+      ThrottlerModule.forRoot({ throttlers: [{ limit: 10, ttl: 60_000 }] }),
       ...(metadata.imports ?? []),
     ],
     providers: metadata.providers ?? [],
