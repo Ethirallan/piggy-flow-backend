@@ -147,4 +147,84 @@ describe('accounts (e2e)', () => {
       await ana.get('/accounts/not-a-uuid').expect(400);
     });
   });
+
+  describe('PATCH /accounts/:id', () => {
+    it('renames an account, Personal too, and trims the name', async () => {
+      const ana = asUser(app, (await registerUser(app)).accessToken);
+      const [personal] = (await ana.get('/accounts')).body as AccountBody[];
+
+      const res = await ana
+        .patch(`/accounts/${personal.id}`)
+        .send({ name: '  Mine ' })
+        .expect(200);
+
+      expect(res.body).toMatchObject({ name: 'Mine', isPersonal: true });
+      expect(names((await ana.get('/accounts')).body)).toEqual(['Mine']);
+    });
+
+    it("answers 404 for someone else's account and leaves the name", async () => {
+      const ana = asUser(
+        app,
+        (await registerUser(app, 'ana@example.com')).accessToken,
+      );
+      const bob = asUser(
+        app,
+        (await registerUser(app, 'bob@example.com')).accessToken,
+      );
+      const { id } = (await ana.post('/accounts').send({ name: 'Home' }))
+        .body as AccountBody;
+
+      await bob.patch(`/accounts/${id}`).send({ name: 'Mine' }).expect(404);
+
+      expect((await ana.get(`/accounts/${id}`)).body.name).toBe('Home');
+    });
+
+    it('answers 400 for a blank name', async () => {
+      const ana = asUser(app, (await registerUser(app)).accessToken);
+      const { id } = (await ana.post('/accounts').send({ name: 'Home' }))
+        .body as AccountBody;
+
+      await ana.patch(`/accounts/${id}`).send({ name: ' ' }).expect(400);
+    });
+  });
+
+  describe('DELETE /accounts/:id', () => {
+    it('deletes a shared account', async () => {
+      const ana = asUser(app, (await registerUser(app)).accessToken);
+      const { id } = (await ana.post('/accounts').send({ name: 'Home' }))
+        .body as AccountBody;
+
+      await ana.delete(`/accounts/${id}`).expect(204);
+
+      await ana.get(`/accounts/${id}`).expect(404);
+      expect(names((await ana.get('/accounts')).body)).toEqual(['Personal']);
+    });
+
+    it('answers 409 for the Personal account and keeps it', async () => {
+      const ana = asUser(app, (await registerUser(app)).accessToken);
+      const [personal] = (await ana.get('/accounts')).body as AccountBody[];
+
+      const res = await ana.delete(`/accounts/${personal.id}`).expect(409);
+
+      expect(res.body.message).toBe("The Personal account can't be deleted");
+      await ana.get(`/accounts/${personal.id}`).expect(200);
+    });
+
+    it("answers 404 for someone else's account and keeps it", async () => {
+      const ana = asUser(
+        app,
+        (await registerUser(app, 'ana@example.com')).accessToken,
+      );
+      const bob = asUser(
+        app,
+        (await registerUser(app, 'bob@example.com')).accessToken,
+      );
+      const { id } = (await ana.post('/accounts').send({ name: 'Home' }))
+        .body as AccountBody;
+
+      await bob.delete(`/accounts/${id}`).expect(404);
+
+      await ana.get(`/accounts/${id}`).expect(200);
+    });
+  });
 });

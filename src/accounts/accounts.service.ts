@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, type EntityManager, Repository } from 'typeorm';
 import { compareAccounts } from './account-order.js';
@@ -35,7 +39,61 @@ export class AccountsService {
    */
   async findForMember(accountId: string, userId: string): Promise<Account> {
     const account = await this.accounts.findOneBy({ id: accountId });
-    if (!account || !(await this.members.existsBy({ accountId, userId }))) {
+    return this.requireMember(account, userId, this.members);
+  }
+
+  /**
+   * Like findForMember, but locks the account row (FOR UPDATE) until
+   * `manager`'s transaction ends, so changes that depend on the member list
+   * can't interleave.
+   */
+  async lockForMember(
+    accountId: string,
+    userId: string,
+    manager: EntityManager,
+  ): Promise<Account> {
+    const account = await manager.getRepository(Account).findOne({
+      where: { id: accountId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    return this.requireMember(
+      account,
+      userId,
+      manager.getRepository(AccountMember),
+    );
+  }
+
+  async rename(
+    accountId: string,
+    userId: string,
+    name: string,
+  ): Promise<Account> {
+    const account = await this.findForMember(accountId, userId);
+    account.name = name;
+    return this.accounts.save(account);
+  }
+
+  async delete(accountId: string, userId: string): Promise<void> {
+    await this.dataSource.transaction(async (manager) => {
+      const account = await this.lockForMember(accountId, userId, manager);
+      if (account.isPersonal) {
+        throw new ConflictException("The Personal account can't be deleted");
+      }
+      // Shops, categories, bills and subscriptions add their "still in use"
+      // 409 checks here; their ON DELETE RESTRICT foreign keys back them up.
+      await manager.getRepository(Account).delete({ id: account.id });
+    });
+  }
+
+  private async requireMember(
+    account: Account | null,
+    userId: string,
+    members: Repository<AccountMember>,
+  ): Promise<Account> {
+    if (
+      !account ||
+      !(await members.existsBy({ accountId: account.id, userId }))
+    ) {
       throw new NotFoundException(ACCOUNT_NOT_FOUND);
     }
     return account;
