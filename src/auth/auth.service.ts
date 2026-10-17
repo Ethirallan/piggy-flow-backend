@@ -75,6 +75,14 @@ export class AuthService {
 
   async refresh(refreshToken: string): Promise<TokenPairDto> {
     const result = await this.sessions.rotate(refreshToken);
+    if (result.status === 'superseded') {
+      // Another request from the same device rotated this token moments ago.
+      this.logger.log({
+        event: 'auth.refresh_superseded',
+        userId: result.userId,
+        sessionId: result.sessionId,
+      });
+    }
     if (result.status === 'reused') {
       this.logger.warn({
         event: 'auth.refresh_reuse_detected',

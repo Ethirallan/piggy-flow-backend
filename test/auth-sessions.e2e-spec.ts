@@ -29,7 +29,7 @@ describe('refresh and logout (e2e)', () => {
     return res.body as { accessToken: string; refreshToken: string };
   };
 
-  it('rotates the refresh token and ends the session when an old one comes back', async () => {
+  it('rotates the refresh token; the old one right after gets 401 but the new one keeps working', async () => {
     const { refreshToken } = await registerUser(app);
 
     const first = await refresh(refreshToken).expect(200);
@@ -40,10 +40,10 @@ describe('refresh and logout (e2e)', () => {
     expect(first.body.refreshToken).not.toBe(refreshToken);
 
     await refresh(refreshToken).expect(401);
-    await refresh(first.body.refreshToken).expect(401);
+    await refresh(first.body.refreshToken).expect(200);
   });
 
-  it('lets exactly one of two simultaneous refreshes win', async () => {
+  it('lets exactly one of two simultaneous refreshes win, and the winner keeps working', async () => {
     const { refreshToken } = await registerUser(app);
 
     const results = await Promise.all([
@@ -54,6 +54,8 @@ describe('refresh and logout (e2e)', () => {
     expect(results.map((r) => r.status).sort((a, b) => a - b)).toEqual([
       200, 401,
     ]);
+    const winner = results.find((r) => r.status === 200)!;
+    await refresh(winner.body.refreshToken).expect(200);
   });
 
   it('answers 401 for a made-up token and 400 for a missing one', async () => {

@@ -8,7 +8,11 @@ import { UsersModule } from '../users/users.module.js';
 import { UsersService } from '../users/users.service.js';
 import { jwtOptions } from './jwt-options.js';
 import { Session } from './session.entity.js';
-import { SESSION_TTL_MS, SessionsService } from './sessions.service.js';
+import {
+  REFRESH_GRACE_MS,
+  SESSION_TTL_MS,
+  SessionsService,
+} from './sessions.service.js';
 import { TokenService } from './token.service.js';
 
 describe('SessionsService (integration)', () => {
@@ -57,13 +61,31 @@ describe('SessionsService (integration)', () => {
     );
   });
 
-  it('rotates a valid token, then treats the old one as reuse and ends the session', async () => {
+  it('rotates a valid token and keeps the session when the old one comes back right away', async () => {
     const { sessionId, refreshToken } = await service.create(userId);
 
     const rotated = await service.rotate(refreshToken);
     expect(rotated).toMatchObject({ status: 'rotated', userId, sessionId });
     if (rotated.status !== 'rotated') throw new Error('expected rotated');
     expect(rotated.refreshToken).not.toBe(refreshToken);
+
+    await expect(service.rotate(refreshToken)).resolves.toEqual({
+      status: 'superseded',
+      userId,
+      sessionId,
+    });
+    await expect(service.rotate(rotated.refreshToken)).resolves.toMatchObject({
+      status: 'rotated',
+    });
+  });
+
+  it('treats the previous token as reuse once the grace window has passed', async () => {
+    const { sessionId, refreshToken } = await service.create(userId);
+    await service.rotate(refreshToken);
+    await sessions.update(
+      { id: sessionId },
+      { rotatedAt: new Date(Date.now() - REFRESH_GRACE_MS - 1_000) },
+    );
 
     await expect(service.rotate(refreshToken)).resolves.toEqual({
       status: 'reused',
@@ -73,7 +95,19 @@ describe('SessionsService (integration)', () => {
     await expect(sessions.existsBy({ id: sessionId })).resolves.toBe(false);
   });
 
-  it('lets exactly one of two simultaneous rotations win', async () => {
+  it('treats a token from two rotations back as reuse', async () => {
+    const { sessionId, refreshToken: first } = await service.create(userId);
+    const second = await service.rotate(first);
+    if (second.status !== 'rotated') throw new Error('expected rotated');
+    await service.rotate(second.refreshToken);
+
+    await expect(service.rotate(first)).resolves.toMatchObject({
+      status: 'reused',
+    });
+    await expect(sessions.existsBy({ id: sessionId })).resolves.toBe(false);
+  });
+
+  it('lets exactly one of two simultaneous rotations win, and the winner keeps working', async () => {
     const { refreshToken } = await service.create(userId);
 
     const results = await Promise.all([
@@ -81,9 +115,13 @@ describe('SessionsService (integration)', () => {
       service.rotate(refreshToken),
     ]);
 
-    expect(
-      results.filter((result) => result.status === 'rotated'),
-    ).toHaveLength(1);
+    const winners = results.filter((result) => result.status === 'rotated');
+    expect(winners).toHaveLength(1);
+    await expect(
+      service.rotate(winners[0].refreshToken),
+    ).resolves.toMatchObject({
+      status: 'rotated',
+    });
   });
 
   it('loses the race when another request rotates the token after it was read', async () => {
@@ -186,6 +224,18 @@ describe('SessionsService (integration)', () => {
     expect(reissued).not.toBe(refreshToken);
     expect(tokens.parseRefreshToken(reissued!)?.sessionId).toBe(sessionId);
     await expect(service.rotate(refreshToken)).resolves.toMatchObject({
+      status: 'reused',
+    });
+  });
+
+  it('gives no grace to the token a reissue replaced', async () => {
+    const { sessionId, refreshToken } = await service.create(userId);
+    const rotated = await service.rotate(refreshToken);
+    if (rotated.status !== 'rotated') throw new Error('expected rotated');
+
+    await service.reissue(sessionId);
+
+    await expect(service.rotate(rotated.refreshToken)).resolves.toMatchObject({
       status: 'reused',
     });
   });
