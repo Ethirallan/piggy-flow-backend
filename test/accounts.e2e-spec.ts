@@ -149,6 +149,14 @@ describe('accounts (e2e)', () => {
   });
 
   describe('PATCH /accounts/:id', () => {
+    it('answers 400 for an id that is not a UUID', async () => {
+      const ana = asUser(app, (await registerUser(app)).accessToken);
+      await ana
+        .patch('/accounts/not-a-uuid')
+        .send({ name: 'Mine' })
+        .expect(400);
+    });
+
     it('renames an account, Personal too, and trims the name', async () => {
       const ana = asUser(app, (await registerUser(app)).accessToken);
       const [personal] = (await ana.get('/accounts')).body as AccountBody[];
@@ -189,6 +197,11 @@ describe('accounts (e2e)', () => {
   });
 
   describe('DELETE /accounts/:id', () => {
+    it('answers 400 for an id that is not a UUID', async () => {
+      const ana = asUser(app, (await registerUser(app)).accessToken);
+      await ana.delete('/accounts/not-a-uuid').expect(400);
+    });
+
     it('deletes a shared account', async () => {
       const ana = asUser(app, (await registerUser(app)).accessToken);
       const { id } = (await ana.post('/accounts').send({ name: 'Home' }))

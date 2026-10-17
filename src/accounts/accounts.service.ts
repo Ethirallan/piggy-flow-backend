@@ -63,14 +63,12 @@ export class AccountsService {
     );
   }
 
-  async rename(
-    accountId: string,
-    userId: string,
-    name: string,
-  ): Promise<Account> {
-    const account = await this.findForMember(accountId, userId);
-    account.name = name;
-    return this.accounts.save(account);
+  rename(accountId: string, userId: string, name: string): Promise<Account> {
+    return this.dataSource.transaction(async (manager) => {
+      const account = await this.lockForMember(accountId, userId, manager);
+      account.name = name;
+      return manager.getRepository(Account).save(account);
+    });
   }
 
   async delete(accountId: string, userId: string): Promise<void> {
