@@ -30,9 +30,9 @@ import { LoginDto } from './dto/login.dto.js';
 import { RefreshDto } from './dto/refresh.dto.js';
 import { RegisterDto } from './dto/register.dto.js';
 import { TokenPairDto } from './dto/token-pair.dto.js';
-import { LoggingThrottlerGuard } from './logging-throttler.guard.js';
+import { LoggingThrottlerGuard } from '../rate-limit/logging-throttler.guard.js';
 import { Public } from './public.decorator.js';
-import { AUTH_RATE_LIMITS } from './rate-limits.js';
+import { AUTH_RATE_LIMITS } from '../rate-limit/rate-limits.js';
 
 @ApiTags('auth')
 @Controller('auth')
