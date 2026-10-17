@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import type { DataSource, EntityManager } from 'typeorm';
 import type { MockInstance } from 'vitest';
+import type { AccountsService } from '../accounts/accounts.service.js';
 import { EmailTakenError } from '../users/email-taken.error.js';
 import type { User } from '../users/user.entity.js';
 import type { UsersService } from '../users/users.service.js';
@@ -50,6 +51,9 @@ function setup() {
     revokeAllExcept: vi.fn(),
     reissue: vi.fn(),
   };
+  const accounts = {
+    createPersonal: vi.fn().mockResolvedValue({ id: 'account-1' }),
+  };
   const dataSource = {
     transaction: vi.fn((work: (m: EntityManager) => Promise<unknown>) =>
       work(manager),
@@ -60,9 +64,10 @@ function setup() {
     passwords as unknown as PasswordService,
     tokens as unknown as TokenService,
     sessions as unknown as SessionsService,
+    accounts as unknown as AccountsService,
     dataSource as unknown as DataSource,
   );
-  return { service, users, passwords, tokens, sessions };
+  return { service, users, passwords, tokens, sessions, accounts };
 }
 
 describe('AuthService', () => {
@@ -88,7 +93,7 @@ describe('AuthService', () => {
     };
 
     it('stores the hashed password and starts a session', async () => {
-      const { service, users, passwords, tokens, sessions } = setup();
+      const { service, users, passwords, tokens, sessions, accounts } = setup();
 
       await expect(service.register(dto)).resolves.toEqual({
         accessToken: 'access-token',
@@ -109,6 +114,7 @@ describe('AuthService', () => {
         },
         manager,
       );
+      expect(accounts.createPersonal).toHaveBeenCalledWith('user-1', manager);
       expect(sessions.create).toHaveBeenCalledWith('user-1', manager);
       expect(tokens.signAccessToken).toHaveBeenCalledWith({
         sub: 'user-1',

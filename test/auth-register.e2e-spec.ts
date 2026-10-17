@@ -42,6 +42,19 @@ describe('POST /auth/register (e2e)', () => {
     });
   });
 
+  it('gives the new user a Personal account and nothing else', async () => {
+    const res = await register(valid).expect(201);
+
+    const rows = await app.get(DataSource).query(
+      `SELECT a.name, a.is_personal
+         FROM accounts a
+         JOIN account_members m ON m.account_id = a.id
+        WHERE m.user_id = $1`,
+      [res.body.user.id],
+    );
+    expect(rows).toEqual([{ name: 'Personal', is_personal: true }]);
+  });
+
   it('rejects an email that is already registered, ignoring case and spaces', async () => {
     await registerUser(app, 'ana@example.com');
 

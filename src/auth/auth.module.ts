@@ -4,6 +4,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { AccountsModule } from '../accounts/accounts.module.js';
 import { UsersModule } from '../users/users.module.js';
 import { AuthController } from './auth.controller.js';
 import { AuthGuard } from './auth.guard.js';
@@ -17,6 +18,7 @@ import { TokenService } from './token.service.js';
 @Module({
   imports: [
     UsersModule,
+    AccountsModule,
     TypeOrmModule.forFeature([Session]),
     ThrottlerModule.forRoot({
       // Applied per route with @UseGuards(LoggingThrottlerGuard) and @Throttle(...).

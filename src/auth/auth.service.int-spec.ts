@@ -3,6 +3,8 @@ import type { TestingModule } from '@nestjs/testing';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { createIntegrationModule, truncateTables } from '../../test/db.js';
+import { AccountsModule } from '../accounts/accounts.module.js';
+import { AccountsService } from '../accounts/accounts.service.js';
 import { UsersModule } from '../users/users.module.js';
 import { AuthService } from './auth.service.js';
 import { jwtOptions } from './jwt-options.js';
@@ -31,6 +33,7 @@ describe('AuthService (integration)', () => {
     moduleRef = await createIntegrationModule({
       imports: [
         UsersModule,
+        AccountsModule,
         TypeOrmModule.forFeature([Session]),
         JwtModule.register(jwtOptions('s'.repeat(32))),
       ],
@@ -59,7 +62,25 @@ describe('AuthService (integration)', () => {
     ).rejects.toThrow('session insert failed');
 
     expect(await count('users')).toBe(0);
+    expect(await count('accounts')).toBe(0);
     // The same email can register once the failure is gone.
+    await expect(
+      auth.register({ email, password, displayName: 'Ana' }),
+    ).resolves.toMatchObject({ user: { email } });
+  });
+
+  it('leaves no user behind when the Personal account cannot be created during register', async () => {
+    vi.spyOn(
+      moduleRef.get(AccountsService),
+      'createPersonal',
+    ).mockRejectedValueOnce(new Error('account insert failed'));
+
+    await expect(
+      auth.register({ email, password, displayName: 'Ana' }),
+    ).rejects.toThrow('account insert failed');
+
+    expect(await count('users')).toBe(0);
+    expect(await count('sessions')).toBe(0);
     await expect(
       auth.register({ email, password, displayName: 'Ana' }),
     ).resolves.toMatchObject({ user: { email } });
