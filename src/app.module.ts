@@ -10,6 +10,7 @@ import { buildLoggerParams } from './logging/logger-params.js';
 import { UsersModule } from './users/users.module.js';
 import { AccountsModule } from './accounts/accounts.module.js';
 import { ShopsModule } from './shops/shops.module.js';
+import { CategoriesModule } from './categories/categories.module.js';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { ShopsModule } from './shops/shops.module.js';
     UsersModule,
     AccountsModule,
     ShopsModule,
+    CategoriesModule,
     AuthModule,
   ],
   controllers: [AppController],
