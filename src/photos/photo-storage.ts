@@ -1,11 +1,11 @@
 import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
-import { constants, createReadStream, type ReadStream } from 'node:fs';
+import { constants, type ReadStream } from 'node:fs';
 import {
   access,
   mkdir,
+  open,
   rename,
   rm,
-  stat,
   unlink,
   writeFile,
 } from 'node:fs/promises';
@@ -51,16 +51,27 @@ export class PhotoStorage implements OnModuleInit {
     }
   }
 
-  /** The photo's file, or null when it's missing. */
+  /**
+   * The photo's file, or null when it's missing. The file is opened first, so
+   * a concurrent delete can't break the stream (an opened file stays readable
+   * after unlink); the stream closes the handle when it ends or is destroyed.
+   */
   async open(id: string): Promise<StoredPhoto | null> {
     const path = this.path(id);
+    let handle;
     try {
-      const { size } = await stat(path);
-      return { stream: createReadStream(path), size };
+      handle = await open(path, 'r');
     } catch (error) {
       if (isMissing(error)) {
         return null;
       }
+      throw error;
+    }
+    try {
+      const { size } = await handle.stat();
+      return { stream: handle.createReadStream(), size };
+    } catch (error) {
+      await handle.close();
       throw error;
     }
   }

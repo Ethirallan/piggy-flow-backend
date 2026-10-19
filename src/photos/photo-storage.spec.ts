@@ -37,6 +37,20 @@ describe('PhotoStorage', () => {
     await expect(storage.delete(id)).resolves.toBeUndefined();
   });
 
+  it('keeps an opened photo readable across a delete', async () => {
+    const id = randomUUID();
+    await storage.write(id, Buffer.from('jpeg bytes'));
+    const file = await storage.open(id);
+
+    await storage.delete(id);
+    const chunks: Buffer[] = [];
+    for await (const chunk of file!.stream) {
+      chunks.push(chunk as Buffer);
+    }
+
+    expect(Buffer.concat(chunks).toString()).toBe('jpeg bytes');
+  });
+
   it('deletes a stored photo', async () => {
     const id = randomUUID();
     await storage.write(id, Buffer.from('x'));
