@@ -262,5 +262,65 @@ describe('BillsService (integration)', () => {
         }
       }
     });
+
+    it.each([
+      {
+        kind: 'shop',
+        message: 'Shop is in use by bills',
+        make: async (accountId: string, userId: string) => ({
+          column: 'shopId',
+          id: (await shops.create(accountId, userId, 'Lidl')).id,
+        }),
+        remove: (accountId: string, userId: string, id: string) =>
+          shops.delete(accountId, userId, id),
+      },
+      {
+        kind: 'category',
+        message: 'Category is in use by bills',
+        make: async (accountId: string, userId: string) => ({
+          column: 'categoryId',
+          id: (await categories.create(accountId, userId, { name: 'Food' })).id,
+        }),
+        remove: (accountId: string, userId: string, id: string) =>
+          categories.delete(accountId, userId, id),
+      },
+    ])(
+      'answers 409 for a $kind when a bill is saved after the usage check (foreign-key backstop)',
+      async ({ message, make, remove }) => {
+        await truncateTables(dataSource);
+        const ana = await createUser();
+        const home = await accounts.create(ana.id, 'Home');
+        const used = await make(home.id, ana.id);
+
+        // An uncommitted bill: hasBills can't see it, but its insert holds
+        // FOR KEY SHARE on the row, so the delete blocks until the commit.
+        const runner = dataSource.createQueryRunner();
+        await runner.connect();
+        await runner.startTransaction();
+        let committed = false;
+        try {
+          await runner.manager.getRepository(Bill).insert({
+            accountId: home.id,
+            date: at('2026-10-16T11:26:00.000Z'),
+            priceCents: 100,
+            [used.column]: used.id,
+          });
+          const deleting = remove(home.id, ana.id, used.id).then(
+            () => 'deleted',
+            (error: unknown) => error,
+          );
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          await runner.commitTransaction();
+          committed = true;
+
+          const outcome = await deleting;
+          expect(outcome).toEqual(new ConflictException(message));
+          expect(await billCount()).toBe(1);
+        } finally {
+          if (!committed) await runner.rollbackTransaction();
+          await runner.release();
+        }
+      },
+    );
   });
 });

@@ -9,7 +9,7 @@ import { compareAccounts } from './account-order.js';
 import { AccountMember } from './account-member.entity.js';
 import { Account } from './account.entity.js';
 import { hasBills } from '../common/bill-usage.js';
-import { isForeignKeyViolation } from '../common/db-errors.js';
+import { isRestrictViolation } from '../common/db-errors.js';
 
 export const PERSONAL_ACCOUNT_NAME = 'Personal';
 export const ACCOUNT_NOT_FOUND = 'Account not found';
@@ -98,7 +98,7 @@ export class AccountsService {
       try {
         await manager.getRepository(Account).delete({ id: account.id });
       } catch (error) {
-        if (isForeignKeyViolation(error)) {
+        if (isRestrictViolation(error)) {
           throw new ConflictException(ACCOUNT_HAS_BILLS);
         }
         throw error;

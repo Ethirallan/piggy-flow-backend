@@ -9,7 +9,7 @@ import { Repository } from 'typeorm';
 import { AccountsService } from '../accounts/accounts.service.js';
 import { compareByName } from '../common/compare-by-name.js';
 import { hasBills } from '../common/bill-usage.js';
-import { isForeignKeyViolation } from '../common/db-errors.js';
+import { isRestrictViolation } from '../common/db-errors.js';
 import { rethrowListWriteError } from '../common/list-write-errors.js';
 import { Category } from './category.entity.js';
 
@@ -101,7 +101,7 @@ export class CategoriesService {
     try {
       ({ affected } = await this.categories.delete({ id, accountId }));
     } catch (error) {
-      if (isForeignKeyViolation(error)) {
+      if (isRestrictViolation(error)) {
         throw new ConflictException(CATEGORY_IN_USE);
       }
       throw error;

@@ -2,6 +2,7 @@ import { QueryFailedError } from 'typeorm';
 
 const UNIQUE_VIOLATION = '23505';
 const FOREIGN_KEY_VIOLATION = '23503';
+const RESTRICT_VIOLATION = '23001';
 
 function hasPostgresCode(error: unknown, code: string): boolean {
   return (
@@ -18,6 +19,11 @@ export function isUniqueViolation(error: unknown): boolean {
 /** A foreign key rejected the write, e.g. the referenced row is gone. */
 export function isForeignKeyViolation(error: unknown): boolean {
   return hasPostgresCode(error, FOREIGN_KEY_VIOLATION);
+}
+
+/** An ON DELETE RESTRICT key refused a delete: rows still reference it. */
+export function isRestrictViolation(error: unknown): boolean {
+  return hasPostgresCode(error, RESTRICT_VIOLATION);
 }
 
 /** The constraint a query failure violated, when Postgres names one. */
