@@ -136,6 +136,19 @@ describe('bill photos (e2e)', () => {
     );
   });
 
+  it('answers 400 for a text field and leaves no temp files', async () => {
+    const ana = asUser(app, (await registerUser(app)).accessToken);
+    const billId = await createBill(ana);
+
+    await ana
+      .post(`/bills/${billId}/photos`)
+      .field('x', 'y')
+      .attach('files', await jpeg(), 'r.jpg')
+      .expect(400);
+
+    expect(await incoming()).toEqual([]);
+  });
+
   it("answers 404 for someone else's bill and for a photo of another bill, and leaves no temp files", async () => {
     const ana = asUser(
       app,

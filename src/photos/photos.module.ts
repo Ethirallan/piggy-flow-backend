@@ -30,7 +30,13 @@ import { PhotosService } from './photos.service.js';
         }),
         // Browsers send file names as raw UTF-8; multer reads Latin-1 by default.
         defParamCharset: 'utf8',
-        limits: { fileSize: MAX_UPLOAD_BYTES, files: MAX_FILES_PER_REQUEST },
+        // Only `files` parts are expected: no text fields.
+        limits: {
+          fileSize: MAX_UPLOAD_BYTES,
+          files: MAX_FILES_PER_REQUEST,
+          fields: 0,
+          parts: MAX_FILES_PER_REQUEST,
+        },
       }),
     }),
   ],
