@@ -61,6 +61,21 @@ describe('shops (e2e)', () => {
       expect(await shopNames(ana, accountId)).toEqual(['Hofer', 'spar']);
     });
 
+    it('counts the name limit in code points, like the database', async () => {
+      const ana = asUser(app, (await registerUser(app)).accessToken);
+      const accountId = await personalAccountId(ana);
+
+      // '❤️' is two code points: 51 of them are 102 > 100.
+      await ana
+        .post(`/accounts/${accountId}/shops`)
+        .send({ name: '❤️'.repeat(51) })
+        .expect(400);
+      await ana
+        .post(`/accounts/${accountId}/shops`)
+        .send({ name: '❤️'.repeat(50) })
+        .expect(201);
+    });
+
     it('answers 409 for a name the account already has in another case, but allows it elsewhere', async () => {
       const ana = asUser(app, (await registerUser(app)).accessToken);
       const personal = await personalAccountId(ana);

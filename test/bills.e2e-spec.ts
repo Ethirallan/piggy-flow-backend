@@ -95,6 +95,26 @@ describe('bills (e2e)', () => {
         .expect(400);
     });
 
+    it('counts the comment limit in code points, like the database', async () => {
+      const ana = asUser(app, (await registerUser(app)).accessToken);
+      const accountId = await personalAccountId(ana);
+      const body = {
+        accountId,
+        date: '2026-10-16T13:26:00+02:00',
+        priceCents: 100,
+      };
+
+      // '❤️' is two code points (heart + variation selector).
+      await ana
+        .post('/bills')
+        .send({ ...body, comment: '❤️'.repeat(501) })
+        .expect(400);
+      await ana
+        .post('/bills')
+        .send({ ...body, comment: '❤️'.repeat(500) })
+        .expect(201);
+    });
+
     it('answers 400 for a shop from another account', async () => {
       const ana = asUser(app, (await registerUser(app)).accessToken);
       const personal = await personalAccountId(ana);

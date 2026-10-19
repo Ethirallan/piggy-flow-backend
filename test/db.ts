@@ -41,3 +41,26 @@ export async function truncateTables(dataSource: DataSource): Promise<void> {
     await dataSource.query(`TRUNCATE ${names} CASCADE`);
   }
 }
+
+/**
+ * Resolves once some backend is waiting on a lock, so a test can commit the
+ * transaction that holds it only after the blocked operation really blocked.
+ * Run it on a connection outside the blocked ones (it never counts itself).
+ */
+export async function waitForLockWait(
+  dataSource: DataSource,
+  timeoutMs = 5_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const [{ waiting }]: { waiting: number }[] = await dataSource.query(
+      `SELECT count(*)::int AS waiting FROM pg_stat_activity
+       WHERE datname = current_database()
+         AND pid <> pg_backend_pid()
+         AND wait_event_type = 'Lock'`,
+    );
+    if (waiting > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`No query started waiting for a lock within ${timeoutMs} ms`);
+}
