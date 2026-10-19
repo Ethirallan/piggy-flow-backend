@@ -1,12 +1,19 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AccountsService } from '../accounts/accounts.service.js';
 import { compareByName } from '../common/compare-by-name.js';
+import { hasBills } from '../common/bill-usage.js';
+import { isRestrictViolation } from '../common/db-errors.js';
 import { rethrowListWriteError } from '../common/list-write-errors.js';
 import { Shop } from './shop.entity.js';
 
 export const SHOP_NAME_TAKEN = 'A shop with that name already exists';
+export const SHOP_IN_USE = 'Shop is in use by bills';
 export const SHOP_NOT_FOUND = 'Shop not found';
 
 @Injectable()
@@ -57,9 +64,25 @@ export class ShopsService {
 
   async delete(accountId: string, userId: string, id: string): Promise<void> {
     await this.accounts.findForMember(accountId, userId);
-    // Bills and subscriptions add their "still in use" 409 check here; their
-    // ON DELETE RESTRICT foreign keys back it up.
-    const { affected } = await this.shops.delete({ id, accountId });
+    if (
+      await hasBills(this.shops.manager, accountId, {
+        column: 'shop_id',
+        id,
+      })
+    ) {
+      throw new ConflictException(SHOP_IN_USE);
+    }
+    // Subscriptions add their "still in use" check here. A bill saved after
+    // the check trips the RESTRICT foreign key: the same 409.
+    let affected: number | null | undefined;
+    try {
+      ({ affected } = await this.shops.delete({ id, accountId }));
+    } catch (error) {
+      if (isRestrictViolation(error)) {
+        throw new ConflictException(SHOP_IN_USE);
+      }
+      throw error;
+    }
     if (!affected) {
       throw new NotFoundException(SHOP_NOT_FOUND);
     }

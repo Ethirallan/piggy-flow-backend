@@ -1,4 +1,8 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import type { TestingModule } from '@nestjs/testing';
 import { DataSource, QueryFailedError } from 'typeorm';
 import { createIntegrationModule, truncateTables } from '../../test/db.js';
@@ -163,5 +167,160 @@ describe('BillsService (integration)', () => {
         constraint: BILL_PRICE_CHECK,
       });
     });
+  });
+
+  describe('deleting what bills use', () => {
+    const billIn = (userId: string, accountId: string, extra = {}) =>
+      bills.create(userId, {
+        accountId,
+        date: at('2026-10-16T11:26:00.000Z'),
+        priceCents: 100,
+        ...extra,
+      });
+
+    it('answers 409 for an account, shop or category that bills use', async () => {
+      const ana = await createUser();
+      const home = await accounts.create(ana.id, 'Home');
+      const lidl = await shops.create(home.id, ana.id, 'Lidl');
+      const food = await categories.create(home.id, ana.id, { name: 'Food' });
+      await billIn(ana.id, home.id, { shopId: lidl.id, categoryId: food.id });
+
+      await expect(accounts.delete(home.id, ana.id)).rejects.toThrow(
+        new ConflictException('Account still has bills'),
+      );
+      await expect(shops.delete(home.id, ana.id, lidl.id)).rejects.toThrow(
+        new ConflictException('Shop is in use by bills'),
+      );
+      await expect(categories.delete(home.id, ana.id, food.id)).rejects.toThrow(
+        new ConflictException('Category is in use by bills'),
+      );
+      expect(await billCount()).toBe(1);
+    });
+
+    it('answers 404, not 409, for a used shop of another account', async () => {
+      const ana = await createUser();
+      const home = await accounts.create(ana.id, 'Home');
+      const trip = await accounts.create(ana.id, 'Trip');
+      const spar = await shops.create(trip.id, ana.id, 'Spar');
+      await billIn(ana.id, trip.id, { shopId: spar.id });
+
+      await expect(shops.delete(home.id, ana.id, spar.id)).rejects.toThrow(
+        new NotFoundException('Shop not found'),
+      );
+    });
+
+    it('answers 201 or 404, never a database error, when the account is deleted during a create', async () => {
+      // Several rounds, so the delete and the insert almost surely overlap.
+      for (let round = 0; round < 10; round++) {
+        await truncateTables(dataSource);
+        const ana = await createUser();
+        const home = await accounts.create(ana.id, 'Home');
+
+        const [deleted, created] = await Promise.allSettled([
+          accounts.delete(home.id, ana.id),
+          billIn(ana.id, home.id),
+        ]);
+
+        if (created.status === 'fulfilled') {
+          expect(deleted.status).toBe('rejected');
+          expect((deleted as PromiseRejectedResult).reason).toEqual(
+            new ConflictException('Account still has bills'),
+          );
+          expect(await billCount()).toBe(1);
+        } else {
+          expect(deleted.status).toBe('fulfilled');
+          expect(created.reason).toEqual(
+            new NotFoundException('Account not found'),
+          );
+          expect(await billCount()).toBe(0);
+        }
+      }
+    });
+
+    it('answers 201 or 400 for the bill and 204 or 409 for the shop, never a database error, when they race', async () => {
+      for (let round = 0; round < 10; round++) {
+        await truncateTables(dataSource);
+        const ana = await createUser();
+        const home = await accounts.create(ana.id, 'Home');
+        const lidl = await shops.create(home.id, ana.id, 'Lidl');
+
+        const [deleted, created] = await Promise.allSettled([
+          shops.delete(home.id, ana.id, lidl.id),
+          billIn(ana.id, home.id, { shopId: lidl.id }),
+        ]);
+
+        if (created.status === 'fulfilled') {
+          expect(deleted.status).toBe('rejected');
+          expect((deleted as PromiseRejectedResult).reason).toEqual(
+            new ConflictException('Shop is in use by bills'),
+          );
+        } else {
+          expect(deleted.status).toBe('fulfilled');
+          expect(created.reason).toEqual(
+            new BadRequestException('Shop is not in this account'),
+          );
+        }
+      }
+    });
+
+    it.each([
+      {
+        kind: 'shop',
+        message: 'Shop is in use by bills',
+        make: async (accountId: string, userId: string) => ({
+          column: 'shopId',
+          id: (await shops.create(accountId, userId, 'Lidl')).id,
+        }),
+        remove: (accountId: string, userId: string, id: string) =>
+          shops.delete(accountId, userId, id),
+      },
+      {
+        kind: 'category',
+        message: 'Category is in use by bills',
+        make: async (accountId: string, userId: string) => ({
+          column: 'categoryId',
+          id: (await categories.create(accountId, userId, { name: 'Food' })).id,
+        }),
+        remove: (accountId: string, userId: string, id: string) =>
+          categories.delete(accountId, userId, id),
+      },
+    ])(
+      'answers 409 for a $kind when a bill is saved after the usage check (foreign-key backstop)',
+      async ({ message, make, remove }) => {
+        await truncateTables(dataSource);
+        const ana = await createUser();
+        const home = await accounts.create(ana.id, 'Home');
+        const used = await make(home.id, ana.id);
+
+        // An uncommitted bill: hasBills can't see it, but its insert holds
+        // FOR KEY SHARE on the row, so the delete blocks until the commit.
+        const runner = dataSource.createQueryRunner();
+        await runner.connect();
+        await runner.startTransaction();
+        let committed = false;
+        try {
+          await runner.manager.getRepository(Bill).insert({
+            accountId: home.id,
+            date: at('2026-10-16T11:26:00.000Z'),
+            priceCents: 100,
+            [used.column]: used.id,
+          });
+          const deleting = remove(home.id, ana.id, used.id).then(
+            () => 'deleted',
+            (error: unknown) => error,
+          );
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          await runner.commitTransaction();
+          committed = true;
+
+          const outcome = await deleting;
+          expect(outcome).toEqual(new ConflictException(message));
+          expect(await billCount()).toBe(1);
+        } finally {
+          if (!committed) await runner.rollbackTransaction();
+          await runner.release();
+        }
+      },
+    );
   });
 });
