@@ -323,4 +323,107 @@ describe('BillsService (integration)', () => {
       },
     );
   });
+
+  describe('list', () => {
+    const seed = async () => {
+      const ana = await createUser('ana@example.com');
+      const bob = await createUser('bob@example.com', 'Bob');
+      const home = await accounts.create(ana.id, 'Home');
+      const trip = await accounts.create(ana.id, 'Trip');
+      const bobs = await accounts.create(bob.id, 'Bob only');
+      const add = (userId: string, accountId: string, iso: string) =>
+        bills.create(userId, { accountId, date: at(iso), priceCents: 100 });
+      const created = [
+        await add(ana.id, home.id, '2026-09-30T21:59:59.999Z'), // Sep in UTC
+        await add(ana.id, home.id, '2026-09-30T22:00:00.000Z'), // Oct 1 local
+        await add(ana.id, trip.id, '2026-10-16T11:26:00.000Z'),
+        await add(ana.id, home.id, '2026-10-16T11:26:00.000Z'), // same moment
+        await add(ana.id, home.id, '2026-10-31T23:00:00.000Z'), // Nov 1 local
+      ];
+      await add(bob.id, bobs.id, '2026-10-10T10:00:00.000Z');
+      return { ana, bob, home, trip, bobs, created };
+    };
+    /** Newest first, ties by id descending: the order the API promises. */
+    const ordered = (rows: Bill[]) =>
+      [...rows].sort(
+        (a, b) => b.date.getTime() - a.date.getTime() || (a.id < b.id ? 1 : -1),
+      );
+    const ids = (rows: Bill[]) => rows.map((bill) => bill.id);
+
+    it("lists the caller's bills from all their accounts, newest first", async () => {
+      const { ana, created } = await seed();
+
+      const page = await bills.list(ana.id, {});
+
+      expect(ids(page.items)).toEqual(ids(ordered(created)));
+      expect(page.nextCursor).toBeNull();
+    });
+
+    it('filters by account, and answers 404 for an account the caller is not in', async () => {
+      const { ana, home, bobs, created } = await seed();
+
+      const page = await bills.list(ana.id, { accountId: home.id });
+
+      expect(ids(page.items)).toEqual(
+        ids(ordered(created.filter((b) => b.accountId === home.id))),
+      );
+      await expect(bills.list(ana.id, { accountId: bobs.id })).rejects.toThrow(
+        new NotFoundException('Account not found'),
+      );
+    });
+
+    it('includes a bill exactly at from and excludes one exactly at to', async () => {
+      const { ana, created } = await seed();
+
+      const page = await bills.list(ana.id, {
+        from: at('2026-10-01T00:00:00+02:00'),
+        to: at('2026-11-01T00:00:00+01:00'),
+      });
+
+      expect(ids(page.items)).toEqual(
+        ids(ordered([created[1], created[2], created[3]])),
+      );
+    });
+
+    it('pages through bills that share a date without skipping or repeating', async () => {
+      const { ana, created } = await seed();
+
+      const seen: Bill[] = [];
+      let cursor: string | undefined;
+      let pages = 0;
+      do {
+        const page = await bills.list(ana.id, { limit: 2, cursor });
+        seen.push(...page.items);
+        cursor = page.nextCursor ?? undefined;
+        pages++;
+      } while (cursor);
+
+      expect(pages).toBe(3);
+      expect(ids(seen)).toEqual(ids(ordered(created)));
+    });
+
+    it('returns the whole range with all, ignoring the limit', async () => {
+      const { ana, created } = await seed();
+
+      const page = await bills.list(ana.id, { all: true, limit: 2 });
+
+      expect(page.items).toHaveLength(created.length);
+      expect(page.nextCursor).toBeNull();
+    });
+
+    it.each([
+      ['a cursor together with all', { all: true, cursor: 'x' }],
+      [
+        'from not before to',
+        { from: at('2026-10-02T00:00:00Z'), to: at('2026-10-01T00:00:00Z') },
+      ],
+      ['a garbage cursor', { cursor: 'not-a-cursor' }],
+    ])('answers 400 for %s', async (_case, query) => {
+      const ana = await createUser();
+
+      await expect(bills.list(ana.id, query)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+    });
+  });
 });
