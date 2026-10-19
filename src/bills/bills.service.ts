@@ -4,7 +4,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository, type SelectQueryBuilder } from 'typeorm';
+import {
+  DataSource,
+  IsNull,
+  Repository,
+  type SelectQueryBuilder,
+} from 'typeorm';
 import { AccountMember } from '../accounts/account-member.entity.js';
 import {
   ACCOUNT_NOT_FOUND,
@@ -159,9 +164,21 @@ export class BillsService {
 
     let affected: number | null | undefined;
     try {
-      // Filtered by the account it was read in: moved or deleted meanwhile → 404.
+      // Filtered by what was read and checked: the account, and the shop and
+      // category being kept. If any changed meanwhile (moved, deleted, or a
+      // kept shop set elsewhere) nothing matches → 404, never a bill in one
+      // account with another account's shop.
       ({ affected } = await this.bills.update(
-        { id, accountId: bill.accountId },
+        {
+          id,
+          accountId: bill.accountId,
+          ...(changes.shopId === undefined && {
+            shopId: bill.shopId ?? IsNull(),
+          }),
+          ...(changes.categoryId === undefined && {
+            categoryId: bill.categoryId ?? IsNull(),
+          }),
+        },
         set,
       ));
     } catch (error) {

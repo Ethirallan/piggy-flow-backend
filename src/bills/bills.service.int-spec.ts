@@ -535,6 +535,51 @@ describe('BillsService (integration)', () => {
       );
     });
 
+    it('answers 404 when the kept shop changed after it was read, instead of mixing accounts', async () => {
+      const ana = await createUser();
+      const home = await accounts.create(ana.id, 'Home');
+      const trip = await accounts.create(ana.id, 'Trip');
+      const lidl = await shops.create(home.id, ana.id, 'Lidl');
+      const bill = await bills.create(ana.id, {
+        accountId: home.id,
+        date: at('2026-10-16T11:26:00.000Z'),
+        priceCents: 100,
+      });
+
+      // An uncommitted shop change holds the row lock: the move reads no
+      // shop, passes the check, and its UPDATE waits.
+      const runner = dataSource.createQueryRunner();
+      await runner.connect();
+      await runner.startTransaction();
+      let committed = false;
+      try {
+        await runner.query('UPDATE bills SET shop_id = $1 WHERE id = $2', [
+          lidl.id,
+          bill.id,
+        ]);
+        const moving = bills
+          .update(ana.id, bill.id, { accountId: trip.id })
+          .then(
+            () => 'updated',
+            (error: unknown) => error,
+          );
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        await runner.commitTransaction();
+        committed = true;
+
+        expect(await moving).toEqual(new NotFoundException('Bill not found'));
+        await expect(
+          bills.findForMember(bill.id, ana.id),
+        ).resolves.toMatchObject({
+          accountId: home.id,
+          shop: { name: 'Lidl' },
+        });
+      } finally {
+        if (!committed) await runner.rollbackTransaction();
+        await runner.release();
+      }
+    });
+
     it('deletes a bill; afterwards updating it answers 404 and re-creates nothing', async () => {
       const { ana, bill } = await setup();
 
