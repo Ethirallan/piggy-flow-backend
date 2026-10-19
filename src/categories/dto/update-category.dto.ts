@@ -1,6 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString, Length, ValidateIf } from 'class-validator';
+import { IsOptional, IsString, ValidateIf } from 'class-validator';
 import { IsSingleEmoji } from '../../common/is-single-emoji.decorator.js';
+import { CodePointLength } from '../../common/code-point-length.decorator.js';
 import { Trim } from '../../common/trim.decorator.js';
 
 /** Send at least one field; a field left out stays as it is. */
@@ -10,7 +11,8 @@ export class UpdateCategoryDto {
   @ValidateIf((_object, value) => value !== undefined)
   @Trim()
   @IsString()
-  @Length(1, 100)
+  @ApiPropertyOptional({ minLength: 1, maxLength: 100 })
+  @CodePointLength(1, 100)
   name?: string;
 
   @ApiPropertyOptional({

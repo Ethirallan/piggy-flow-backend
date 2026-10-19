@@ -1,14 +1,15 @@
+import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsInt,
   IsOptional,
   IsString,
   IsUUID,
   Max,
-  MaxLength,
   Min,
   NotEquals,
 } from 'class-validator';
 import { IsIsoDateWithOffset } from '../../common/is-iso-date-with-offset.decorator.js';
+import { CodePointLength } from '../../common/code-point-length.decorator.js';
 import { Trim } from '../../common/trim.decorator.js';
 
 export class CreateBillDto {
@@ -39,6 +40,7 @@ export class CreateBillDto {
   @IsOptional()
   @Trim()
   @IsString()
-  @MaxLength(1000)
+  @ApiPropertyOptional({ minLength: 0, maxLength: 1000 })
+  @CodePointLength(0, 1000)
   comment?: string | null;
 }

@@ -1,4 +1,6 @@
+import { ApiProperty } from '@nestjs/swagger';
 import { IsEmail, IsString, Length, MaxLength } from 'class-validator';
+import { CodePointLength } from '../../common/code-point-length.decorator.js';
 import { Trim } from '../../common/trim.decorator.js';
 
 export class RegisterDto {
@@ -14,6 +16,7 @@ export class RegisterDto {
 
   @Trim()
   @IsString()
-  @Length(1, 100)
+  @ApiProperty({ minLength: 1, maxLength: 100 })
+  @CodePointLength(1, 100)
   displayName: string;
 }

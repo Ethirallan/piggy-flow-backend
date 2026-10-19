@@ -1,13 +1,15 @@
-import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString, Length } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsOptional, IsString } from 'class-validator';
 import { IsSingleEmoji } from '../../common/is-single-emoji.decorator.js';
+import { CodePointLength } from '../../common/code-point-length.decorator.js';
 import { Trim } from '../../common/trim.decorator.js';
 
 export class CreateCategoryDto {
   /** Unique within the account, ignoring case. */
   @Trim()
   @IsString()
-  @Length(1, 100)
+  @ApiProperty({ minLength: 1, maxLength: 100 })
+  @CodePointLength(1, 100)
   name: string;
 
   @ApiPropertyOptional({
