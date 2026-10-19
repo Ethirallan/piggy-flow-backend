@@ -22,10 +22,31 @@ import {
   BILL_CATEGORY_FK,
   BILL_SHOP_FK,
 } from './bill.entity.js';
+import { decodeBillCursor, encodeBillCursor } from './bill-cursor.js';
 
 export const BILL_NOT_FOUND = 'Bill not found';
 export const SHOP_NOT_IN_ACCOUNT = 'Shop is not in this account';
 export const CATEGORY_NOT_IN_ACCOUNT = 'Category is not in this account';
+
+export const BILL_PAGE_SIZE = 50;
+export const BILL_PAGE_MAX = 100;
+
+export interface BillListQuery {
+  accountId?: string;
+  /** Inclusive. */
+  from?: Date;
+  /** Exclusive. */
+  to?: Date;
+  limit?: number;
+  cursor?: string;
+  /** The whole filtered range in one page. */
+  all?: boolean;
+}
+
+export interface BillPage {
+  items: Bill[];
+  nextCursor: string | null;
+}
 
 export interface BillInput {
   accountId: string;
@@ -80,8 +101,63 @@ export class BillsService {
     return this.findForMember(id, userId);
   }
 
+  /** Newest first (date, then id), filtered; a page, or everything with `all`. */
+  async list(userId: string, query: BillListQuery): Promise<BillPage> {
+    if (query.all && query.cursor !== undefined) {
+      throw new BadRequestException("cursor can't be combined with all");
+    }
+    if (query.from && query.to && query.from >= query.to) {
+      throw new BadRequestException('from must be before to');
+    }
+    const cursor =
+      query.cursor === undefined ? undefined : decodeBillCursor(query.cursor);
+    if (cursor === null) {
+      throw new BadRequestException('Invalid cursor');
+    }
+    if (query.accountId !== undefined) {
+      await this.accounts.findForMember(query.accountId, userId);
+    }
+
+    const qb = this.visible(userId);
+    if (query.accountId !== undefined) {
+      qb.andWhere('bill.accountId = :accountId', {
+        accountId: query.accountId,
+      });
+    }
+    if (query.from) {
+      qb.andWhere('bill.date >= :from', { from: query.from });
+    }
+    if (query.to) {
+      qb.andWhere('bill.date < :to', { to: query.to });
+    }
+    if (cursor) {
+      qb.andWhere('(bill.date, bill.id) < (:cursorDate, :cursorId)', {
+        cursorDate: cursor.date,
+        cursorId: cursor.id,
+      });
+    }
+    qb.orderBy('bill.date', 'DESC').addOrderBy('bill.id', 'DESC');
+
+    if (query.all) {
+      return { items: await qb.getMany(), nextCursor: null };
+    }
+    const limit = query.limit ?? BILL_PAGE_SIZE;
+    // Every join is to-one, so a plain LIMIT counts bills. One extra row
+    // tells whether another page follows.
+    const rows = await qb.limit(limit + 1).getMany();
+    const items = rows.slice(0, limit);
+    const last = items.at(-1);
+    return {
+      items,
+      nextCursor:
+        rows.length > limit && last
+          ? encodeBillCursor({ date: last.date, id: last.id })
+          : null,
+    };
+  }
+
   /** Bills of the accounts `userId` belongs to, with everything a response shows. */
-  protected visible(userId: string): SelectQueryBuilder<Bill> {
+  private visible(userId: string): SelectQueryBuilder<Bill> {
     return this.bills
       .createQueryBuilder('bill')
       .innerJoin(
