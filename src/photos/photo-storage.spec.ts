@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readdir, readFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PhotoStorage } from './photo-storage.js';
@@ -16,6 +16,18 @@ describe('PhotoStorage', () => {
 
   it('creates the incoming directory at startup', async () => {
     expect(await readdir(dir)).toEqual(['.incoming']);
+  });
+
+  it('removes leftover uploads and temp files at startup, but keeps photos', async () => {
+    const id = randomUUID();
+    await writeFile(join(storage.incomingDir, randomUUID()), 'original');
+    await writeFile(join(dir, `${randomUUID()}.jpg.tmp`), 'half');
+    await writeFile(join(dir, `${id}.jpg`), 'photo');
+
+    await new PhotoStorage(dir).onModuleInit();
+
+    expect((await readdir(dir)).sort()).toEqual(['.incoming', `${id}.jpg`]);
+    expect(await readdir(storage.incomingDir)).toEqual([]);
   });
 
   it('writes <id>.jpg without leaving a temp file, and reads it back', async () => {
