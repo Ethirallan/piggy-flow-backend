@@ -4,6 +4,7 @@ import {
   access,
   mkdir,
   open,
+  readdir,
   rename,
   rm,
   unlink,
@@ -31,11 +32,23 @@ export class PhotoStorage implements OnModuleInit {
     return join(this.dir, '.incoming');
   }
 
-  /** Creates the directories; the app refuses to start if they aren't writable. */
+  /**
+   * Creates the directories; the app refuses to start if they aren't writable.
+   * Then removes what a crash left behind: original uploads (they still carry
+   * GPS data) and half-written temp files. Nothing is in flight before startup.
+   */
   async onModuleInit(): Promise<void> {
     await mkdir(this.incomingDir, { recursive: true });
     await access(this.dir, constants.W_OK);
     await access(this.incomingDir, constants.W_OK);
+    for (const name of await readdir(this.incomingDir)) {
+      await rm(join(this.incomingDir, name), { recursive: true, force: true });
+    }
+    for (const name of await readdir(this.dir)) {
+      if (name.endsWith('.jpg.tmp')) {
+        await rm(join(this.dir, name), { force: true });
+      }
+    }
   }
 
   /** Written to a temp file and renamed, so a crash never leaves half a photo. */
