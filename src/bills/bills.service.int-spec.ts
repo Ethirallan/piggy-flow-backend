@@ -86,6 +86,29 @@ describe('BillsService (integration)', () => {
       );
     });
 
+    it('loads only the id and display name of the users', async () => {
+      const ana = await createUser();
+      const home = await accounts.create(ana.id, 'Home');
+      const { id } = await bills.create(ana.id, {
+        accountId: home.id,
+        date: at('2026-10-16T11:26:00.000Z'),
+        priceCents: 100,
+      });
+
+      const { items } = await bills.list(ana.id, { all: true });
+      const found = await bills.findForMember(id, ana.id);
+
+      for (const bill of [found, items[0]]) {
+        expect(bill.createdBy).toEqual(
+          expect.objectContaining({ id: ana.id, displayName: 'Ana' }),
+        );
+        expect(bill.createdBy?.passwordHash).toBeUndefined();
+        expect(bill.createdBy?.email).toBeUndefined();
+        expect(bill.updatedBy?.passwordHash).toBeUndefined();
+        expect(bill.updatedBy?.email).toBeUndefined();
+      }
+    });
+
     it('stores a blank comment and missing shop and category as null', async () => {
       const ana = await createUser();
       const home = await accounts.create(ana.id, 'Home');

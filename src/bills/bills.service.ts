@@ -270,8 +270,10 @@ export class BillsService {
       .leftJoinAndSelect('bill.account', 'account')
       .leftJoinAndSelect('bill.shop', 'shop')
       .leftJoinAndSelect('bill.category', 'category')
-      .leftJoinAndSelect('bill.createdBy', 'createdBy')
-      .leftJoinAndSelect('bill.updatedBy', 'updatedBy');
+      .leftJoin('bill.createdBy', 'createdBy')
+      .addSelect(['createdBy.id', 'createdBy.displayName'])
+      .leftJoin('bill.updatedBy', 'updatedBy')
+      .addSelect(['updatedBy.id', 'updatedBy.displayName']);
   }
 
   /** 400 unless the shop and category (when set) belong to the account. */
