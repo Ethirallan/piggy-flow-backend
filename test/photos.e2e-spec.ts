@@ -104,6 +104,38 @@ describe('bill photos (e2e)', () => {
     expect(await incoming()).toEqual([]);
   });
 
+  it('keeps non-ASCII file names intact when the browser sends raw UTF-8', async () => {
+    const ana = asUser(app, (await registerUser(app)).accessToken);
+    const billId = await createBill(ana);
+    // Browsers put the UTF-8 bytes in `filename=` as they are; build the body
+    // by hand so the test doesn't depend on how supertest encodes the name.
+    const boundary = '----piggy-test-boundary';
+    const body = Buffer.concat([
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="račun š.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`,
+        'utf8',
+      ),
+      await jpeg(),
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+
+    const uploaded = await ana
+      .post(`/bills/${billId}/photos`)
+      .set('Content-Type', `multipart/form-data; boundary=${boundary}`)
+      .send(body)
+      .expect(201);
+    const [photo] = uploaded.body as PhotoBody[];
+    const download = await ana
+      .get(`/bills/${billId}/photos/${photo.id}`)
+      .buffer(true)
+      .expect(200);
+
+    expect(photo.name).toBe('račun š.jpg');
+    expect(download.headers['content-disposition']).toBe(
+      `inline; filename="photo.jpg"; filename*=UTF-8''ra%C4%8Dun%20%C5%A1.jpg`,
+    );
+  });
+
   it("answers 404 for someone else's bill and for a photo of another bill, and leaves no temp files", async () => {
     const ana = asUser(
       app,

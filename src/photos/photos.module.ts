@@ -28,6 +28,8 @@ import { PhotosService } from './photos.service.js';
           destination: storage.incomingDir,
           filename: (_request, _file, done) => done(null, randomUUID()),
         }),
+        // Browsers send file names as raw UTF-8; multer reads Latin-1 by default.
+        defParamCharset: 'utf8',
         limits: { fileSize: MAX_UPLOAD_BYTES, files: MAX_FILES_PER_REQUEST },
       }),
     }),
