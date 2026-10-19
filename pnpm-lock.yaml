@@ -48,7 +48,7 @@ importers:
         specifier: ^18.0.7
         version: 18.0.7
       multer:
-        specifier: 2.4.0
+        specifier: ^2.4.0
         version: 2.4.0
       nestjs-pino:
         specifier: ^5.3.1

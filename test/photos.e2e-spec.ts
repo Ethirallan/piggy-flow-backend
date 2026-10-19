@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readdir } from 'node:fs/promises';
+import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
@@ -30,10 +30,23 @@ describe('bill photos (e2e)', () => {
 
   afterAll(() => app.close());
 
-  beforeEach(() => resetDatabase(app));
+  const incomingDir = () => join(process.env.UPLOADS_DIR!, '.incoming');
+  // The interceptor's deletes aren't awaited by the response, so poll briefly.
+  const incoming = async () => {
+    let names = await readdir(incomingDir());
+    for (let i = 0; i < 50 && names.length > 0; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      names = await readdir(incomingDir());
+    }
+    return names;
+  };
 
-  const incoming = async () =>
-    readdir(join(process.env.UPLOADS_DIR!, '.incoming'));
+  beforeEach(async () => {
+    await resetDatabase(app);
+    for (const name of await readdir(incomingDir())) {
+      await rm(join(incomingDir(), name), { force: true });
+    }
+  });
   const personalAccountId = async (as: As) =>
     ((await as.get('/accounts').expect(200)).body as { id: string }[])[0].id;
   const createBill = async (as: As) => {
