@@ -5,7 +5,11 @@ import {
 } from '@nestjs/common';
 import type { TestingModule } from '@nestjs/testing';
 import { DataSource, QueryFailedError } from 'typeorm';
-import { createIntegrationModule, truncateTables } from '../../test/db.js';
+import {
+  createIntegrationModule,
+  truncateTables,
+  waitForLockWait,
+} from '../../test/db.js';
 import { AccountsService } from '../accounts/accounts.service.js';
 import { CategoriesModule } from '../categories/categories.module.js';
 import { CategoriesService } from '../categories/categories.service.js';
@@ -310,7 +314,7 @@ describe('BillsService (integration)', () => {
             () => 'deleted',
             (error: unknown) => error,
           );
-          await new Promise((resolve) => setTimeout(resolve, 200));
+          await waitForLockWait(dataSource);
           await runner.commitTransaction();
           committed = true;
 
@@ -535,50 +539,68 @@ describe('BillsService (integration)', () => {
       );
     });
 
-    it('answers 404 when the kept shop changed after it was read, instead of mixing accounts', async () => {
-      const ana = await createUser();
-      const home = await accounts.create(ana.id, 'Home');
-      const trip = await accounts.create(ana.id, 'Trip');
-      const lidl = await shops.create(home.id, ana.id, 'Lidl');
-      const bill = await bills.create(ana.id, {
-        accountId: home.id,
-        date: at('2026-10-16T11:26:00.000Z'),
-        priceCents: 100,
-      });
-
-      // An uncommitted shop change holds the row lock: the move reads no
-      // shop, passes the check, and its UPDATE waits.
-      const runner = dataSource.createQueryRunner();
-      await runner.connect();
-      await runner.startTransaction();
-      let committed = false;
-      try {
-        await runner.query('UPDATE bills SET shop_id = $1 WHERE id = $2', [
-          lidl.id,
-          bill.id,
-        ]);
-        const moving = bills
-          .update(ana.id, bill.id, { accountId: trip.id })
-          .then(
-            () => 'updated',
-            (error: unknown) => error,
-          );
-        await new Promise((resolve) => setTimeout(resolve, 200));
-        await runner.commitTransaction();
-        committed = true;
-
-        expect(await moving).toEqual(new NotFoundException('Bill not found'));
-        await expect(
-          bills.findForMember(bill.id, ana.id),
-        ).resolves.toMatchObject({
+    it.each([
+      {
+        kind: 'shop',
+        column: 'shop_id',
+        key: 'shop',
+        make: (accountId: string, userId: string) =>
+          shops.create(accountId, userId, 'Lidl'),
+      },
+      {
+        kind: 'category',
+        column: 'category_id',
+        key: 'category',
+        make: (accountId: string, userId: string) =>
+          categories.create(accountId, userId, { name: 'Lidl' }),
+      },
+    ])(
+      'answers 404 when the kept $kind changed after it was read, instead of mixing accounts',
+      async ({ column, key, make }) => {
+        const ana = await createUser();
+        const home = await accounts.create(ana.id, 'Home');
+        const trip = await accounts.create(ana.id, 'Trip');
+        const kept = await make(home.id, ana.id);
+        const bill = await bills.create(ana.id, {
           accountId: home.id,
-          shop: { name: 'Lidl' },
+          date: at('2026-10-16T11:26:00.000Z'),
+          priceCents: 100,
         });
-      } finally {
-        if (!committed) await runner.rollbackTransaction();
-        await runner.release();
-      }
-    });
+
+        // An uncommitted change holds the row lock: the move reads no
+        // shop/category, passes the check, and its UPDATE waits.
+        const runner = dataSource.createQueryRunner();
+        await runner.connect();
+        await runner.startTransaction();
+        let committed = false;
+        try {
+          await runner.query(`UPDATE bills SET ${column} = $1 WHERE id = $2`, [
+            kept.id,
+            bill.id,
+          ]);
+          const moving = bills
+            .update(ana.id, bill.id, { accountId: trip.id })
+            .then(
+              () => 'updated',
+              (error: unknown) => error,
+            );
+          await waitForLockWait(dataSource);
+          await runner.commitTransaction();
+          committed = true;
+
+          expect(await moving).toEqual(new NotFoundException('Bill not found'));
+          await expect(
+            bills.findForMember(bill.id, ana.id),
+          ).resolves.toMatchObject({
+            accountId: home.id,
+            [key]: { name: 'Lidl' },
+          });
+        } finally {
+          if (!committed) await runner.rollbackTransaction();
+          await runner.release();
+        }
+      },
+    );
 
     it('deletes a bill; afterwards updating it answers 404 and re-creates nothing', async () => {
       const { ana, bill } = await setup();
