@@ -194,4 +194,34 @@ describe('bill photos (e2e)', () => {
       .expect(401);
     expect(await incoming()).toEqual([]);
   });
+
+  it('includes photos in bill responses and removes them with the bill', async () => {
+    const ana = asUser(app, (await registerUser(app)).accessToken);
+    const billId = await createBill(ana);
+    const [photo] = (
+      await ana
+        .post(`/bills/${billId}/photos`)
+        .attach('files', await jpeg(), 'r.jpg')
+        .expect(201)
+    ).body as PhotoBody[];
+
+    const one = await ana.get(`/bills/${billId}`).expect(200);
+    const list = await ana.get('/bills').expect(200);
+    await ana.delete(`/bills/${billId}`).expect(204);
+
+    expect(one.body.photos).toEqual([
+      {
+        id: photo.id,
+        name: 'r.jpg',
+        width: photo.width,
+        height: photo.height,
+        sizeBytes: photo.sizeBytes,
+        createdAt: expect.any(String),
+      },
+    ]);
+    expect(list.body.items[0].photos).toHaveLength(1);
+    expect(await readdir(process.env.UPLOADS_DIR!)).not.toContain(
+      `${photo.id}.jpg`,
+    );
+  });
 });

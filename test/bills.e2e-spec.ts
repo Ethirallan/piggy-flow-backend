@@ -68,6 +68,7 @@ describe('bills (e2e)', () => {
         updatedBy: { userId: registered.user.id, displayName: 'Ana' },
         createdAt: expect.any(String),
         updatedAt: expect.any(String),
+        photos: [],
       });
     });
 

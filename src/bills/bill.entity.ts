@@ -1,3 +1,4 @@
+import { ApiHideProperty } from '@nestjs/swagger';
 import {
   Check,
   Column,
@@ -12,6 +13,7 @@ import {
 import { Account } from '../accounts/account.entity.js';
 import { Category } from '../categories/category.entity.js';
 import { Shop } from '../shops/shop.entity.js';
+import type { BillPhoto } from '../photos/bill-photo.entity.js';
 import { User } from '../users/user.entity.js';
 
 // Named so a violation's constraint tells which reference failed.
@@ -82,4 +84,11 @@ export class Bill {
 
   @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updatedAt: Date;
+
+  /**
+   * Filled by BillsService (one query per page), not a TypeORM relation:
+   * a decorated relation would make the two entity files import each other.
+   */
+  @ApiHideProperty() // else the Swagger plugin imports BillPhoto at runtime
+  photos?: BillPhoto[];
 }

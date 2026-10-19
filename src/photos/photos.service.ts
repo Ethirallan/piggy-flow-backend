@@ -101,7 +101,7 @@ export class PhotosService {
     billId: string,
     photoId: string,
   ): Promise<{ photo: BillPhoto; file: StoredPhoto }> {
-    await this.bills.findForMember(billId, userId);
+    await this.bills.assertVisible(billId, userId);
     const photo = await this.photos.findOneBy({ id: photoId, billId });
     if (!photo) {
       throw new NotFoundException(PHOTO_NOT_FOUND);
@@ -120,7 +120,7 @@ export class PhotosService {
    * param may be upper case, storage accepts lower case only.
    */
   async remove(userId: string, billId: string, photoId: string): Promise<void> {
-    await this.bills.findForMember(billId, userId);
+    await this.bills.assertVisible(billId, userId);
     const photo = await this.photos.findOneBy({ id: photoId, billId });
     if (!photo) {
       throw new NotFoundException(PHOTO_NOT_FOUND);

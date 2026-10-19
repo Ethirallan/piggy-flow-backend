@@ -1,12 +1,14 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
   DataSource,
   type EntityManager,
+  In,
   IsNull,
   Repository,
   type SelectQueryBuilder,
@@ -21,6 +23,8 @@ import {
   isForeignKeyViolation,
   violatedConstraint,
 } from '../common/db-errors.js';
+import { BillPhoto } from '../photos/bill-photo.entity.js';
+import { PhotoStorage } from '../photos/photo-storage.js';
 import { Shop } from '../shops/shop.entity.js';
 import {
   Bill,
@@ -80,11 +84,23 @@ export class BillsService {
   constructor(
     @InjectRepository(Bill) private readonly bills: Repository<Bill>,
     private readonly accounts: AccountsService,
+    @InjectRepository(BillPhoto)
+    private readonly photos: Repository<BillPhoto>,
+    private readonly storage: PhotoStorage,
     private readonly dataSource: DataSource,
   ) {}
 
+  private readonly logger = new Logger(BillsService.name);
+
   /** The bill, if the caller is a member of its account; otherwise 404. One query. */
   async findForMember(id: string, userId: string): Promise<Bill> {
+    const bill = await this.assertVisible(id, userId);
+    await this.attachPhotos([bill]);
+    return bill;
+  }
+
+  /** Like findForMember, for checks that only need access: no photo query. */
+  async assertVisible(id: string, userId: string): Promise<Bill> {
     const bill = await this.visible(userId)
       .where('bill.id = :id', { id })
       .getOne();
@@ -161,7 +177,7 @@ export class BillsService {
     if (Object.values(changes).every((value) => value === undefined)) {
       throw new BadRequestException('Nothing to update');
     }
-    const bill = await this.findForMember(id, userId);
+    const bill = await this.assertVisible(id, userId);
     const accountId = changes.accountId ?? bill.accountId;
     if (accountId !== bill.accountId) {
       await this.accounts.findForMember(accountId, userId);
@@ -221,14 +237,32 @@ export class BillsService {
   }
 
   async delete(userId: string, id: string): Promise<void> {
-    const bill = await this.findForMember(id, userId);
-    // The photos spec adds file cleanup here.
-    const { affected } = await this.bills.delete({
-      id,
-      accountId: bill.accountId,
+    const photoIds = await this.dataSource.transaction(async (manager) => {
+      // FOR UPDATE waits for an upload in progress, so its photos are seen here.
+      const bill = await this.lockForMember(
+        id,
+        userId,
+        manager,
+        'pessimistic_write',
+      );
+      const photos = await manager.getRepository(BillPhoto).find({
+        select: { id: true },
+        where: { billId: bill.id },
+      });
+      await manager.getRepository(Bill).delete({ id: bill.id }); // rows cascade
+      return photos.map((photo) => photo.id);
     });
-    if (!affected) {
-      throw new NotFoundException(BILL_NOT_FOUND);
+    // After the commit: a failed delete only leaves an unreferenced file.
+    for (const photoId of photoIds) {
+      try {
+        await this.storage.delete(photoId);
+      } catch (error) {
+        this.logger.warn({
+          event: 'bills.photo_file_delete_failed',
+          photoId,
+          error: String(error),
+        });
+      }
     }
   }
 
@@ -270,13 +304,16 @@ export class BillsService {
     qb.orderBy('bill.date', 'DESC').addOrderBy('bill.id', 'DESC');
 
     if (query.all) {
-      return { items: await qb.getMany(), nextCursor: null };
+      const items = await qb.getMany();
+      await this.attachPhotos(items);
+      return { items, nextCursor: null };
     }
     const limit = query.limit ?? BILL_PAGE_SIZE;
     // Every join is to-one, so a plain LIMIT counts bills. One extra row
     // tells whether another page follows.
     const rows = await qb.limit(limit + 1).getMany();
     const items = rows.slice(0, limit);
+    await this.attachPhotos(items);
     const last = items.at(-1);
     return {
       items,
@@ -285,6 +322,26 @@ export class BillsService {
           ? encodeBillCursor({ date: last.date, id: last.id })
           : null,
     };
+  }
+
+  /** One query for every bill's photos (never a join: it would multiply rows under LIMIT). */
+  private async attachPhotos(bills: Bill[]): Promise<void> {
+    if (bills.length === 0) {
+      return;
+    }
+    const photos = await this.photos.find({
+      where: { billId: In(bills.map((bill) => bill.id)) },
+      order: { createdAt: 'ASC', id: 'ASC' },
+    });
+    const byBill = new Map<string, BillPhoto[]>();
+    for (const photo of photos) {
+      const list = byBill.get(photo.billId) ?? [];
+      list.push(photo);
+      byBill.set(photo.billId, list);
+    }
+    for (const bill of bills) {
+      bill.photos = byBill.get(bill.id) ?? [];
+    }
   }
 
   /** Bills of the accounts `userId` belongs to, with everything a response shows. */
