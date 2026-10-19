@@ -92,7 +92,7 @@ export class BillsService {
 
   private readonly logger = new Logger(BillsService.name);
 
-  /** The bill, if the caller is a member of its account; otherwise 404. One query. */
+  /** The bill, if the caller is a member of its account; otherwise 404. Two queries: visibility, then photos. */
   async findForMember(id: string, userId: string): Promise<Bill> {
     const bill = await this.assertVisible(id, userId);
     await this.attachPhotos([bill]);
