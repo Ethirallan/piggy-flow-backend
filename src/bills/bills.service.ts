@@ -4,7 +4,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository, type SelectQueryBuilder } from 'typeorm';
+import {
+  DataSource,
+  IsNull,
+  Repository,
+  type SelectQueryBuilder,
+} from 'typeorm';
 import { AccountMember } from '../accounts/account-member.entity.js';
 import {
   ACCOUNT_NOT_FOUND,
@@ -57,6 +62,18 @@ export interface BillInput {
   comment?: string | null;
 }
 
+export interface BillChanges {
+  accountId?: string;
+  date?: Date;
+  priceCents?: number;
+  /** null clears it. */
+  shopId?: string | null;
+  /** null clears it. */
+  categoryId?: string | null;
+  /** null clears it. */
+  comment?: string | null;
+}
+
 @Injectable()
 export class BillsService {
   constructor(
@@ -99,6 +116,90 @@ export class BillsService {
       rethrowBillWriteError(error);
     }
     return this.findForMember(id, userId);
+  }
+
+  /**
+   * Changes only the fields given. Moving to another account needs
+   * membership there, and the bill's shop and category (new or kept) must
+   * belong to the account it ends up in. A filtered UPDATE, never save().
+   */
+  async update(
+    userId: string,
+    id: string,
+    changes: BillChanges,
+  ): Promise<Bill> {
+    if (Object.values(changes).every((value) => value === undefined)) {
+      throw new BadRequestException('Nothing to update');
+    }
+    const bill = await this.findForMember(id, userId);
+    const accountId = changes.accountId ?? bill.accountId;
+    if (accountId !== bill.accountId) {
+      await this.accounts.findForMember(accountId, userId);
+    }
+    const shopId = changes.shopId !== undefined ? changes.shopId : bill.shopId;
+    const categoryId =
+      changes.categoryId !== undefined ? changes.categoryId : bill.categoryId;
+    await this.assertInAccount(accountId, shopId, categoryId);
+
+    const set: Partial<
+      Pick<
+        Bill,
+        | 'accountId'
+        | 'date'
+        | 'priceCents'
+        | 'shopId'
+        | 'categoryId'
+        | 'comment'
+        | 'updatedById'
+      >
+    > = { updatedById: userId };
+    if (changes.accountId !== undefined) set.accountId = changes.accountId;
+    if (changes.date !== undefined) set.date = changes.date;
+    if (changes.priceCents !== undefined) set.priceCents = changes.priceCents;
+    if (changes.shopId !== undefined) set.shopId = changes.shopId;
+    if (changes.categoryId !== undefined) set.categoryId = changes.categoryId;
+    if (changes.comment !== undefined) {
+      set.comment = normalizeComment(changes.comment);
+    }
+
+    let affected: number | null | undefined;
+    try {
+      // Filtered by what was read and checked: the account, and the shop and
+      // category being kept. If any changed meanwhile (moved, deleted, or a
+      // kept shop set elsewhere) nothing matches → 404, never a bill in one
+      // account with another account's shop.
+      ({ affected } = await this.bills.update(
+        {
+          id,
+          accountId: bill.accountId,
+          ...(changes.shopId === undefined && {
+            shopId: bill.shopId ?? IsNull(),
+          }),
+          ...(changes.categoryId === undefined && {
+            categoryId: bill.categoryId ?? IsNull(),
+          }),
+        },
+        set,
+      ));
+    } catch (error) {
+      rethrowBillWriteError(error);
+    }
+    if (!affected) {
+      throw new NotFoundException(BILL_NOT_FOUND);
+    }
+    return this.findForMember(id, userId);
+  }
+
+  async delete(userId: string, id: string): Promise<void> {
+    const bill = await this.findForMember(id, userId);
+    // The photos spec adds file cleanup here.
+    const { affected } = await this.bills.delete({
+      id,
+      accountId: bill.accountId,
+    });
+    if (!affected) {
+      throw new NotFoundException(BILL_NOT_FOUND);
+    }
   }
 
   /** Newest first (date, then id), filtered; a page, or everything with `all`. */
@@ -174,7 +275,7 @@ export class BillsService {
   }
 
   /** 400 unless the shop and category (when set) belong to the account. */
-  protected async assertInAccount(
+  private async assertInAccount(
     accountId: string,
     shopId: string | null,
     categoryId: string | null,
