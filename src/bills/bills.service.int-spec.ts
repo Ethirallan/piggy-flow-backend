@@ -441,4 +441,109 @@ describe('BillsService (integration)', () => {
       );
     });
   });
+
+  describe('update and delete', () => {
+    const setup = async () => {
+      const ana = await createUser('ana@example.com');
+      const bob = await createUser('bob@example.com', 'Bob');
+      const home = await accounts.create(ana.id, 'Home');
+      const trip = await accounts.create(ana.id, 'Trip');
+      const lidl = await shops.create(home.id, ana.id, 'Lidl');
+      const spar = await shops.create(trip.id, ana.id, 'Spar');
+      const bill = await bills.create(ana.id, {
+        accountId: home.id,
+        date: at('2026-10-16T11:26:00.000Z'),
+        priceCents: 100,
+        shopId: lidl.id,
+        comment: 'weekly',
+      });
+      return { ana, bob, home, trip, lidl, spar, bill };
+    };
+
+    it('changes only the fields given, clears with null, and records who changed it', async () => {
+      const { ana, bob, home, bill } = await setup();
+      // Bob joins Home and edits Ana's bill.
+      await dataSource.query(
+        'INSERT INTO account_members (account_id, user_id) VALUES ($1, $2)',
+        [home.id, bob.id],
+      );
+
+      const updated = await bills.update(bob.id, bill.id, {
+        priceCents: -100,
+        shopId: null,
+        comment: null,
+      });
+
+      expect(updated).toMatchObject({
+        priceCents: -100,
+        shopId: null,
+        comment: null,
+        date: bill.date,
+        createdBy: { id: ana.id },
+        updatedBy: { id: bob.id },
+      });
+      expect(updated.updatedAt.getTime()).toBeGreaterThan(
+        bill.updatedAt.getTime(),
+      );
+    });
+
+    it('moves a bill to another account with a shop from that account', async () => {
+      const { ana, trip, spar, bill } = await setup();
+
+      const moved = await bills.update(ana.id, bill.id, {
+        accountId: trip.id,
+        shopId: spar.id,
+      });
+
+      expect(moved).toMatchObject({
+        accountId: trip.id,
+        shop: { name: 'Spar' },
+      });
+    });
+
+    it('answers 400 when a move keeps a shop from the old account, and changes nothing', async () => {
+      const { ana, home, trip, bill } = await setup();
+
+      await expect(
+        bills.update(ana.id, bill.id, { accountId: trip.id }),
+      ).rejects.toThrow(new BadRequestException('Shop is not in this account'));
+      await expect(bills.findForMember(bill.id, ana.id)).resolves.toMatchObject(
+        { accountId: home.id, shop: { name: 'Lidl' } },
+      );
+    });
+
+    it('answers 404 for a move into an account the caller is not in', async () => {
+      const { ana, bob, bill } = await setup();
+      const bobs = await accounts.create(bob.id, 'Bob only');
+
+      await expect(
+        bills.update(ana.id, bill.id, { accountId: bobs.id, shopId: null }),
+      ).rejects.toThrow(new NotFoundException('Account not found'));
+    });
+
+    it('answers 400 for nothing to update, and 404 for a non-member', async () => {
+      const { ana, bob, bill } = await setup();
+
+      await expect(bills.update(ana.id, bill.id, {})).rejects.toThrow(
+        new BadRequestException('Nothing to update'),
+      );
+      await expect(
+        bills.update(bob.id, bill.id, { priceCents: 5 }),
+      ).rejects.toThrow(new NotFoundException('Bill not found'));
+      await expect(bills.delete(bob.id, bill.id)).rejects.toThrow(
+        new NotFoundException('Bill not found'),
+      );
+    });
+
+    it('deletes a bill; afterwards updating it answers 404 and re-creates nothing', async () => {
+      const { ana, bill } = await setup();
+
+      await bills.delete(ana.id, bill.id);
+
+      await expect(
+        bills.update(ana.id, bill.id, { priceCents: 5 }),
+      ).rejects.toThrow(new NotFoundException('Bill not found'));
+      expect(await billCount()).toBe(0);
+    });
+  });
 });

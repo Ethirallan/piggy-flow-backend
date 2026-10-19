@@ -213,4 +213,86 @@ describe('bills (e2e)', () => {
       await request(app.getHttpServer()).get('/bills').expect(401);
     });
   });
+
+  describe('PATCH and DELETE /bills/:id', () => {
+    const setup = async () => {
+      const ana = asUser(app, (await registerUser(app)).accessToken);
+      const personal = await personalAccountId(ana);
+      const home = await createAccount(ana, 'Home');
+      const shop = (
+        await ana.post(`/accounts/${personal}/shops`).send({ name: 'Lidl' })
+      ).body as { id: string };
+      const bill = await createBill(ana, {
+        accountId: personal,
+        date: '2026-10-16T13:26:00+02:00',
+        priceCents: 100,
+        shopId: shop.id,
+      });
+      return { ana, personal, home, shop, bill };
+    };
+
+    it('changes the price and date, and clears the shop with null', async () => {
+      const { ana, bill } = await setup();
+
+      const res = await ana
+        .patch(`/bills/${bill.id}`)
+        .send({ priceCents: -250, date: '2026-10-17T08:00:00Z', shopId: null })
+        .expect(200);
+
+      expect(res.body).toMatchObject({
+        priceCents: -250,
+        date: '2026-10-17T08:00:00.000Z',
+        shop: null,
+      });
+    });
+
+    it('answers 400 when moving a bill but keeping a shop from the old account', async () => {
+      const { ana, home, bill } = await setup();
+
+      const res = await ana
+        .patch(`/bills/${bill.id}`)
+        .send({ accountId: home })
+        .expect(400);
+      const moved = await ana
+        .patch(`/bills/${bill.id}`)
+        .send({ accountId: home, shopId: null })
+        .expect(200);
+
+      expect(res.body.message).toBe('Shop is not in this account');
+      expect(moved.body.account).toEqual({ id: home, name: 'Home' });
+    });
+
+    it.each([
+      ['an empty body', {}],
+      ['a null price', { priceCents: null }],
+      ['a null date', { date: null }],
+      ['a null account', { accountId: null }],
+      ['a date without an offset', { date: '2026-10-17T08:00:00' }],
+      ['a zero price', { priceCents: 0 }],
+    ])('answers 400 for %s', async (_case, body) => {
+      const { ana, bill } = await setup();
+
+      await ana.patch(`/bills/${bill.id}`).send(body).expect(400);
+    });
+
+    it('deletes a bill; a second delete answers 404', async () => {
+      const { ana, bill } = await setup();
+
+      await ana.delete(`/bills/${bill.id}`).expect(204);
+      await ana.delete(`/bills/${bill.id}`).expect(404);
+      await ana.get(`/bills/${bill.id}`).expect(404);
+    });
+
+    it("answers 404 for someone else's bill and 400 for a malformed id", async () => {
+      const { bill } = await setup();
+      const bob = asUser(
+        app,
+        (await registerUser(app, 'bob@example.com', 'Bob')).accessToken,
+      );
+
+      await bob.patch(`/bills/${bill.id}`).send({ priceCents: 5 }).expect(404);
+      await bob.delete(`/bills/${bill.id}`).expect(404);
+      await bob.delete('/bills/123').expect(400);
+    });
+  });
 });
