@@ -6,6 +6,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import {
   DataSource,
+  type EntityManager,
   IsNull,
   Repository,
   type SelectQueryBuilder,
@@ -86,6 +87,35 @@ export class BillsService {
   async findForMember(id: string, userId: string): Promise<Bill> {
     const bill = await this.visible(userId)
       .where('bill.id = :id', { id })
+      .getOne();
+    if (!bill) {
+      throw new NotFoundException(BILL_NOT_FOUND);
+    }
+    return bill;
+  }
+
+  /**
+   * The bill, if the caller is a member of its account, with only the bill
+   * row locked until `manager`'s transaction ends. Uploads take FOR NO KEY
+   * UPDATE (they serialize with each other); deleting a bill takes FOR UPDATE.
+   */
+  async lockForMember(
+    id: string,
+    userId: string,
+    manager: EntityManager,
+    mode: 'for_no_key_update' | 'pessimistic_write' = 'for_no_key_update',
+  ): Promise<Bill> {
+    const bill = await manager
+      .getRepository(Bill)
+      .createQueryBuilder('bill')
+      .innerJoin(
+        AccountMember,
+        'member',
+        'member.accountId = bill.accountId AND member.userId = :userId',
+        { userId },
+      )
+      .where('bill.id = :id', { id })
+      .setLock(mode, undefined, ['bill'])
       .getOne();
     if (!bill) {
       throw new NotFoundException(BILL_NOT_FOUND);
