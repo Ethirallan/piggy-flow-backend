@@ -54,6 +54,9 @@ export class PhotosService {
     if (uploads.length === 0) {
       throw new BadRequestException(NO_PHOTOS);
     }
+    // Cheap early answer for a foreign or unknown bill; the locked check below
+    // is what guarantees correctness.
+    await this.bills.assertVisible(billId, userId);
     const processed: { name: string; photo: ProcessedPhoto }[] = [];
     for (const upload of uploads) {
       processed.push({

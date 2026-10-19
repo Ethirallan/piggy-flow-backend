@@ -135,6 +135,17 @@ describe('PhotosService (integration)', () => {
     expect(await storedFiles()).toEqual([]);
   });
 
+  it('answers 404 to a non-member before looking at the files', async () => {
+    const { bill } = await setup();
+    const bob = await createUser('bob@example.com', 'Bob');
+
+    await expect(
+      photos.add(bob.id, bill.id, [
+        await upload(Buffer.from('not an image'), 'fake.jpg'),
+      ]),
+    ).rejects.toThrow(new NotFoundException('Bill not found'));
+  });
+
   it('answers 409 past 10 photos per bill', async () => {
     const { ana, bill } = await setup();
     const eight = await Promise.all(
