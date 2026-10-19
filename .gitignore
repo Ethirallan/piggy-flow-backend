@@ -40,3 +40,6 @@ firebase.json
 
 # TypeScript incremental build cache
 *.tsbuildinfo
+
+# Receipt photos written by local runs (default UPLOADS_DIR)
+/uploads/
