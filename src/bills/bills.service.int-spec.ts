@@ -13,6 +13,7 @@ import { ShopsModule } from '../shops/shops.module.js';
 import { ShopsService } from '../shops/shops.service.js';
 import { UsersService } from '../users/users.service.js';
 import { Bill, BILL_PRICE_CHECK } from './bill.entity.js';
+import { encodeBillCursor } from './bill-cursor.js';
 import { BillsModule } from './bills.module.js';
 import { BillsService } from './bills.service.js';
 
@@ -412,17 +413,31 @@ describe('BillsService (integration)', () => {
     });
 
     it.each([
-      ['a cursor together with all', { all: true, cursor: 'x' }],
+      [
+        'a cursor together with all',
+        {
+          all: true,
+          cursor: encodeBillCursor({
+            date: new Date('2026-10-16T11:26:00.000Z'),
+            id: '3f2b8c1e-6c4a-4f7e-9a1d-2b5c8e9f0a1b',
+          }),
+        },
+        "cursor can't be combined with all",
+      ],
       [
         'from not before to',
-        { from: at('2026-10-02T00:00:00Z'), to: at('2026-10-01T00:00:00Z') },
+        {
+          from: at('2026-10-02T00:00:00Z'),
+          to: at('2026-10-01T00:00:00Z'),
+        },
+        'from must be before to',
       ],
-      ['a garbage cursor', { cursor: 'not-a-cursor' }],
-    ])('answers 400 for %s', async (_case, query) => {
+      ['a garbage cursor', { cursor: 'not-a-cursor' }, 'Invalid cursor'],
+    ])('answers 400 for %s', async (_case, query, message) => {
       const ana = await createUser();
 
-      await expect(bills.list(ana.id, query)).rejects.toBeInstanceOf(
-        BadRequestException,
+      await expect(bills.list(ana.id, query)).rejects.toThrow(
+        new BadRequestException(message),
       );
     });
   });

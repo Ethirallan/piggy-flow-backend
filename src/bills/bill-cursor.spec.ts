@@ -27,6 +27,16 @@ describe('bill cursor', () => {
       ),
     ],
     [
+      'a loose date',
+      Buffer.from(JSON.stringify(['0', id])).toString('base64url'),
+    ],
+    [
+      'a non-canonical date',
+      Buffer.from(JSON.stringify(['2026-10-16T13:26:00+02:00', id])).toString(
+        'base64url',
+      ),
+    ],
+    [
       'three parts',
       Buffer.from(JSON.stringify(['2026-10-16T11:26:00.000Z', id, 1])).toString(
         'base64url',

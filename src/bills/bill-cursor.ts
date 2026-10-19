@@ -28,5 +28,8 @@ export function decodeBillCursor(token: string): BillCursor | null {
     return null;
   }
   const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? null : { date, id };
+  // Only the exact form encodeBillCursor emits; Date also parses "0" etc.
+  return !Number.isNaN(date.getTime()) && date.toISOString() === iso
+    ? { date, id }
+    : null;
 }
