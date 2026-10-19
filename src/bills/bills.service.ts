@@ -94,13 +94,19 @@ export class BillsService {
 
   /** The bill, if the caller is a member of its account; otherwise 404. One query. */
   async findForMember(id: string, userId: string): Promise<Bill> {
+    const bill = await this.assertVisible(id, userId);
+    await this.attachPhotos([bill]);
+    return bill;
+  }
+
+  /** Like findForMember, for checks that only need access: no photo query. */
+  async assertVisible(id: string, userId: string): Promise<Bill> {
     const bill = await this.visible(userId)
       .where('bill.id = :id', { id })
       .getOne();
     if (!bill) {
       throw new NotFoundException(BILL_NOT_FOUND);
     }
-    await this.attachPhotos([bill]);
     return bill;
   }
 
@@ -171,7 +177,7 @@ export class BillsService {
     if (Object.values(changes).every((value) => value === undefined)) {
       throw new BadRequestException('Nothing to update');
     }
-    const bill = await this.findForMember(id, userId);
+    const bill = await this.assertVisible(id, userId);
     const accountId = changes.accountId ?? bill.accountId;
     if (accountId !== bill.accountId) {
       await this.accounts.findForMember(accountId, userId);

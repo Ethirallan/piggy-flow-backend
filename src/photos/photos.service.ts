@@ -72,10 +72,7 @@ export class PhotosService {
           throw new ConflictException(TOO_MANY_PHOTOS);
         }
         const saved: BillPhoto[] = [];
-        // now() is the transaction's start, the same for the whole batch;
-        // one millisecond apart keeps the upload order when listing.
-        const startedAt = Date.now();
-        for (const [index, { name, photo }] of processed.entries()) {
+        for (const { name, photo } of processed) {
           const row = await repo.save(
             repo.create({
               billId,
@@ -84,7 +81,6 @@ export class PhotosService {
               height: photo.height,
               sizeBytes: photo.jpeg.length,
               createdById: userId,
-              createdAt: new Date(startedAt + index),
             }),
           );
           await this.storage.write(row.id, photo.jpeg);
@@ -105,7 +101,7 @@ export class PhotosService {
     billId: string,
     photoId: string,
   ): Promise<{ photo: BillPhoto; file: StoredPhoto }> {
-    await this.bills.findForMember(billId, userId);
+    await this.bills.assertVisible(billId, userId);
     const photo = await this.photos.findOneBy({ id: photoId, billId });
     if (!photo) {
       throw new NotFoundException(PHOTO_NOT_FOUND);
@@ -124,7 +120,7 @@ export class PhotosService {
    * param may be upper case, storage accepts lower case only.
    */
   async remove(userId: string, billId: string, photoId: string): Promise<void> {
-    await this.bills.findForMember(billId, userId);
+    await this.bills.assertVisible(billId, userId);
     const photo = await this.photos.findOneBy({ id: photoId, billId });
     if (!photo) {
       throw new NotFoundException(PHOTO_NOT_FOUND);

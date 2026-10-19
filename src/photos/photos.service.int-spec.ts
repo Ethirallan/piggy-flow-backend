@@ -305,6 +305,29 @@ describe('PhotosService (integration)', () => {
       );
     });
 
+    it('keeps upload order across back-to-back uploads', async () => {
+      const { ana, bill } = await setup();
+      await photos.add(ana.id, bill.id, [
+        await upload(jpeg(), 'a.jpg'),
+        await upload(jpeg(), 'b.jpg'),
+        await upload(jpeg(), 'c.jpg'),
+      ]);
+      await photos.add(ana.id, bill.id, [
+        await upload(jpeg(), 'd.jpg'),
+        await upload(jpeg(), 'e.jpg'),
+      ]);
+
+      const found = await bills.findForMember(bill.id, ana.id);
+
+      expect(found.photos?.map((p) => p.name)).toEqual([
+        'a.jpg',
+        'b.jpg',
+        'c.jpg',
+        'd.jpg',
+        'e.jpg',
+      ]);
+    });
+
     it("deletes a bill's photo files with the bill", async () => {
       const { ana, bill } = await setup();
       await photos.add(ana.id, bill.id, [

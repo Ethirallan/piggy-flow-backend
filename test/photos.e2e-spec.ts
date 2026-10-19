@@ -194,6 +194,7 @@ describe('bill photos (e2e)', () => {
       .expect(401);
     expect(await incoming()).toEqual([]);
   });
+
   it('includes photos in bill responses and removes them with the bill', async () => {
     const ana = asUser(app, (await registerUser(app)).accessToken);
     const billId = await createBill(ana);

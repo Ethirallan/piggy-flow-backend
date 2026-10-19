@@ -46,6 +46,12 @@ export class BillPhoto {
   @JoinColumn({ name: 'created_by' })
   createdBy?: User | null;
 
-  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
+  // clock_timestamp(), not now(): a batch shares one transaction, and
+  // photos list in the order they were inserted.
+  @CreateDateColumn({
+    name: 'created_at',
+    type: 'timestamptz',
+    default: () => 'clock_timestamp()',
+  })
   createdAt: Date;
 }
