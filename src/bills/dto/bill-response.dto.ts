@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { PhotoResponseDto } from '../../photos/dto/photo-response.dto.js';
 import type { User } from '../../users/user.entity.js';
 import type { Bill } from '../bill.entity.js';
 
@@ -57,6 +58,10 @@ export class BillResponseDto {
   createdAt: Date;
   updatedAt: Date;
 
+  /** Oldest first. */
+  @ApiProperty({ type: PhotoResponseDto, isArray: true })
+  photos: PhotoResponseDto[];
+
   /** `bill` must come from BillsService (relations loaded). */
   static from(bill: Bill): BillResponseDto {
     return {
@@ -77,6 +82,7 @@ export class BillResponseDto {
       updatedBy: BillUserDto.from(bill.updatedBy),
       createdAt: bill.createdAt,
       updatedAt: bill.updatedAt,
+      photos: (bill.photos ?? []).map((photo) => PhotoResponseDto.from(photo)),
     };
   }
 }

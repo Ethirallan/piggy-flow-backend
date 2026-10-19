@@ -72,7 +72,10 @@ export class PhotosService {
           throw new ConflictException(TOO_MANY_PHOTOS);
         }
         const saved: BillPhoto[] = [];
-        for (const { name, photo } of processed) {
+        // now() is the transaction's start, the same for the whole batch;
+        // one millisecond apart keeps the upload order when listing.
+        const startedAt = Date.now();
+        for (const [index, { name, photo }] of processed.entries()) {
           const row = await repo.save(
             repo.create({
               billId,
@@ -81,6 +84,7 @@ export class PhotosService {
               height: photo.height,
               sizeBytes: photo.jpeg.length,
               createdById: userId,
+              createdAt: new Date(startedAt + index),
             }),
           );
           await this.storage.write(row.id, photo.jpeg);

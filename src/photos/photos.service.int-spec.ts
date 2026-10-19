@@ -268,4 +268,93 @@ describe('PhotosService (integration)', () => {
       new NotFoundException('Photo not found'),
     );
   });
+
+  describe('with bills', () => {
+    it('lists bills with their photos, still paging by bills', async () => {
+      const { ana, home, bill } = await setup();
+      const second = await bills.create(ana.id, {
+        accountId: home.id,
+        date: new Date('2026-10-15T11:26:00.000Z'),
+        priceCents: 200,
+      });
+      await photos.add(ana.id, bill.id, [
+        await upload(jpeg(), 'a.jpg'),
+        await upload(jpeg(), 'b.jpg'),
+        await upload(jpeg(), 'c.jpg'),
+      ]);
+
+      const first = await bills.list(ana.id, { limit: 1 });
+      const next = await bills.list(ana.id, {
+        limit: 1,
+        cursor: first.nextCursor ?? undefined,
+      });
+
+      expect(first.items).toHaveLength(1);
+      expect(first.items[0].photos?.map((p) => p.name)).toEqual([
+        'a.jpg',
+        'b.jpg',
+        'c.jpg',
+      ]);
+      expect(next.items.map((b) => [b.id, b.photos])).toEqual([
+        [second.id, []],
+      ]);
+      await expect(bills.findForMember(bill.id, ana.id)).resolves.toMatchObject(
+        {
+          photos: [{ name: 'a.jpg' }, { name: 'b.jpg' }, { name: 'c.jpg' }],
+        },
+      );
+    });
+
+    it("deletes a bill's photo files with the bill", async () => {
+      const { ana, bill } = await setup();
+      await photos.add(ana.id, bill.id, [
+        await upload(jpeg()),
+        await upload(jpeg()),
+      ]);
+
+      await bills.delete(ana.id, bill.id);
+
+      expect(await photoCount()).toBe(0);
+      expect(await storedFiles()).toEqual([]);
+    });
+
+    it('waits for an upload in progress before deleting the bill, and removes its files too', async () => {
+      const { ana, bill } = await setup();
+      // An upload in progress holds the bill lock and has written a file.
+      const uploading = dataSource.createQueryRunner();
+      await uploading.connect();
+      await uploading.startTransaction();
+      let committed = false;
+      try {
+        await uploading.query(
+          'SELECT id FROM bills WHERE id = $1 FOR NO KEY UPDATE',
+          [bill.id],
+        );
+        const { identifiers } = await uploading.manager
+          .getRepository(BillPhoto)
+          .insert({
+            billId: bill.id,
+            name: 'u.jpg',
+            width: 1,
+            height: 1,
+            sizeBytes: 1,
+          });
+        const photoId = identifiers[0].id as string;
+        await storage.write(photoId, await jpeg());
+
+        const deleting = bills.delete(ana.id, bill.id);
+        await waitForLockWait(dataSource);
+        await uploading.commitTransaction();
+        committed = true;
+        await deleting;
+
+        expect(await storedFiles()).toEqual([]);
+      } finally {
+        if (!committed) {
+          await uploading.rollbackTransaction();
+        }
+        await uploading.release();
+      }
+    });
+  });
 });
