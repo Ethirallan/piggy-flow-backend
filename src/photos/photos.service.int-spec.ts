@@ -242,6 +242,23 @@ describe('PhotosService (integration)', () => {
     expect(await storedFiles()).toEqual([]);
   });
 
+  it('opens a photo by an upper case id, but not through another bill', async () => {
+    const { ana, home, bill } = await setup();
+    const other = await bills.create(ana.id, {
+      accountId: home.id,
+      date: new Date('2026-10-16T11:26:00.000Z'),
+      priceCents: 200,
+    });
+    const [photo] = await photos.add(ana.id, bill.id, [await upload(jpeg())]);
+
+    const opened = await photos.open(ana.id, bill.id, photo.id.toUpperCase());
+    expect(opened.photo.id).toBe(photo.id);
+    opened.file.stream.destroy();
+    await expect(photos.open(ana.id, other.id, photo.id)).rejects.toThrow(
+      new NotFoundException('Photo not found'),
+    );
+  });
+
   it('answers 404 when the file is missing', async () => {
     const { ana, bill } = await setup();
     const [photo] = await photos.add(ana.id, bill.id, [await upload(jpeg())]);

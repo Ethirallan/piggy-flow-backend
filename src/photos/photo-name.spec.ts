@@ -14,6 +14,6 @@ describe('photoDisplayName', () => {
   });
 
   it('cuts to 255 code points', () => {
-    expect([...photoDisplayName('😀'.repeat(300))]).toHaveLength(255);
+    expect(Array.from(photoDisplayName('😀'.repeat(300)))).toHaveLength(255);
   });
 });

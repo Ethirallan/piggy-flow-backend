@@ -5,5 +5,5 @@ export const MAX_NAME_LENGTH = 255;
 export function photoDisplayName(original: string): string {
   const base = original.split(/[\\/]/).pop() ?? '';
   const clean = base.replace(CONTROL, '').trim();
-  return [...clean].slice(0, MAX_NAME_LENGTH).join('') || 'photo';
+  return Array.from(clean).slice(0, MAX_NAME_LENGTH).join('') || 'photo';
 }
