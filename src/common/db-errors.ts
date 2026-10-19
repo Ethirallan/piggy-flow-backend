@@ -19,3 +19,12 @@ export function isUniqueViolation(error: unknown): boolean {
 export function isForeignKeyViolation(error: unknown): boolean {
   return hasPostgresCode(error, FOREIGN_KEY_VIOLATION);
 }
+
+/** The constraint a query failure violated, when Postgres names one. */
+export function violatedConstraint(error: unknown): string | undefined {
+  if (!(error instanceof QueryFailedError)) {
+    return undefined;
+  }
+  const { constraint } = error.driverError as { constraint?: unknown };
+  return typeof constraint === 'string' ? constraint : undefined;
+}
