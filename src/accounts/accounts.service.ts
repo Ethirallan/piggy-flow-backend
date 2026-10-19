@@ -8,9 +8,12 @@ import { DataSource, type EntityManager, Repository } from 'typeorm';
 import { compareAccounts } from './account-order.js';
 import { AccountMember } from './account-member.entity.js';
 import { Account } from './account.entity.js';
+import { hasBills } from '../common/bill-usage.js';
+import { isForeignKeyViolation } from '../common/db-errors.js';
 
 export const PERSONAL_ACCOUNT_NAME = 'Personal';
 export const ACCOUNT_NOT_FOUND = 'Account not found';
+export const ACCOUNT_HAS_BILLS = 'Account still has bills';
 
 @Injectable()
 export class AccountsService {
@@ -87,9 +90,19 @@ export class AccountsService {
       if (account.isPersonal) {
         throw new ConflictException("The Personal account can't be deleted");
       }
-      // Shops, categories, bills and subscriptions add their "still in use"
-      // 409 checks here; their ON DELETE RESTRICT foreign keys back them up.
-      await manager.getRepository(Account).delete({ id: account.id });
+      if (await hasBills(manager, account.id)) {
+        throw new ConflictException(ACCOUNT_HAS_BILLS);
+      }
+      // Subscriptions add their "still in use" check here. The bills'
+      // RESTRICT foreign key is the backstop for anything the check missed.
+      try {
+        await manager.getRepository(Account).delete({ id: account.id });
+      } catch (error) {
+        if (isForeignKeyViolation(error)) {
+          throw new ConflictException(ACCOUNT_HAS_BILLS);
+        }
+        throw error;
+      }
     });
   }
 

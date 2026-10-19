@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -7,10 +8,13 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AccountsService } from '../accounts/accounts.service.js';
 import { compareByName } from '../common/compare-by-name.js';
+import { hasBills } from '../common/bill-usage.js';
+import { isForeignKeyViolation } from '../common/db-errors.js';
 import { rethrowListWriteError } from '../common/list-write-errors.js';
 import { Category } from './category.entity.js';
 
 export const CATEGORY_NAME_TAKEN = 'A category with that name already exists';
+export const CATEGORY_IN_USE = 'Category is in use by bills';
 export const CATEGORY_NOT_FOUND = 'Category not found';
 
 export interface CategoryInput {
@@ -83,9 +87,25 @@ export class CategoriesService {
 
   async delete(accountId: string, userId: string, id: string): Promise<void> {
     await this.accounts.findForMember(accountId, userId);
-    // Bills and subscriptions add their "still in use" 409 check here; their
-    // ON DELETE RESTRICT foreign keys back it up.
-    const { affected } = await this.categories.delete({ id, accountId });
+    if (
+      await hasBills(this.categories.manager, accountId, {
+        column: 'category_id',
+        id,
+      })
+    ) {
+      throw new ConflictException(CATEGORY_IN_USE);
+    }
+    // Subscriptions add their "still in use" check here. A bill saved after
+    // the check trips the RESTRICT foreign key: the same 409.
+    let affected: number | null | undefined;
+    try {
+      ({ affected } = await this.categories.delete({ id, accountId }));
+    } catch (error) {
+      if (isForeignKeyViolation(error)) {
+        throw new ConflictException(CATEGORY_IN_USE);
+      }
+      throw error;
+    }
     if (!affected) {
       throw new NotFoundException(CATEGORY_NOT_FOUND);
     }
