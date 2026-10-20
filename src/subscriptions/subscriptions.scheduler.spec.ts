@@ -6,7 +6,11 @@ describe('SubscriptionsScheduler', () => {
   const original = process.env.SUBSCRIPTION_CHARGES_DISABLED;
 
   afterEach(() => {
-    process.env.SUBSCRIPTION_CHARGES_DISABLED = original;
+    if (original === undefined) {
+      delete process.env.SUBSCRIPTION_CHARGES_DISABLED;
+    } else {
+      process.env.SUBSCRIPTION_CHARGES_DISABLED = original;
+    }
     vi.restoreAllMocks();
   });
 

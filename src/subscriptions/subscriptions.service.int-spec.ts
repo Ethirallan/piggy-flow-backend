@@ -232,6 +232,35 @@ describe('SubscriptionsService (integration)', () => {
       ).rejects.toThrow(new BadRequestException('Shop is not in this account'));
     });
 
+    it('moves a subscription to another account with a shop of that account, or none', async () => {
+      const ana = await createUser();
+      const home = await accounts.create(ana.id, 'Home');
+      const trip = await accounts.create(ana.id, 'Trip');
+      const lidl = await shops.create(home.id, ana.id, 'Lidl');
+      const spar = await shops.create(trip.id, ana.id, 'Spar');
+      const sub = await subscriptions.create(ana.id, {
+        accountId: home.id,
+        priceCents: 100,
+        chargeDay: 1,
+        shopId: lidl.id,
+      });
+
+      const moved = await subscriptions.update(ana.id, sub.id, {
+        accountId: trip.id,
+        shopId: spar.id,
+      });
+      expect(moved.account?.id).toBe(trip.id);
+      expect(moved.shop?.id).toBe(spar.id);
+
+      const back = await subscriptions.update(ana.id, sub.id, {
+        accountId: home.id,
+        shopId: null,
+      });
+      expect(back.account?.id).toBe(home.id);
+      expect(back.shop).toBeNull();
+      expect(back.shopId).toBeNull();
+    });
+
     it('deletes a subscription; another member can, a non-member gets 404', async () => {
       const ana = await createUser('ana@example.com');
       const bob = await createUser('bob@example.com', 'Bob');
@@ -333,10 +362,15 @@ describe('SubscriptionsService (integration)', () => {
     it('deletes an account’s subscriptions with the account', async () => {
       const ana = await createUser();
       const home = await accounts.create(ana.id, 'Home');
+      // Its shop and category cascade too: the RESTRICT keys must not block.
+      const netflix = await shops.create(home.id, ana.id, 'Netflix');
+      const fun = await categories.create(home.id, ana.id, { name: 'Fun' });
       await subscriptions.create(ana.id, {
         accountId: home.id,
         priceCents: 100,
         chargeDay: 1,
+        shopId: netflix.id,
+        categoryId: fun.id,
       });
 
       await expect(accounts.delete(home.id, ana.id)).resolves.toBeUndefined();

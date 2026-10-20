@@ -157,17 +157,21 @@ describe('subscriptions (e2e)', () => {
         .send({
           accountId,
           priceCents: 1299,
-          chargeDay: Number(localToday().slice(8)),
+          chargeDay: 15,
           name: 'Streaming',
           shopId: shop.id,
         })
         .expect(201)
-    ).body as { id: string };
+    ).body as { id: string; nextChargeDate: string };
 
-    expect(await app.get(SubscriptionChargerService).run()).toBe(1);
+    expect(
+      await app
+        .get(SubscriptionChargerService)
+        .run(subscription.nextChargeDate),
+    ).toBe(1);
 
     const bills = (await ana.get('/bills').expect(200)).body as {
-      items: unknown[];
+      items: { id: string }[];
     };
     expect(bills.items).toEqual([
       expect.objectContaining({
@@ -178,6 +182,15 @@ describe('subscriptions (e2e)', () => {
         createdBy: null,
       }),
     ]);
-    await ana.delete(`/accounts/${accountId}/shops/${shop.id}`).expect(409);
+    // The generated bill uses the shop too, and bills are checked first.
+    const deleteShop = () =>
+      ana.delete(`/accounts/${accountId}/shops/${shop.id}`).expect(409);
+    expect((await deleteShop()).body).toMatchObject({
+      message: 'Shop is in use by bills',
+    });
+    await ana.delete(`/bills/${bills.items[0].id}`).expect(204);
+    expect((await deleteShop()).body).toMatchObject({
+      message: 'Shop is in use by subscriptions',
+    });
   });
 });
