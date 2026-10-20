@@ -38,6 +38,16 @@ function isSupported(meta: Metadata): boolean {
   }
 }
 
+/** Throws what processPhoto throws for an image with this header. */
+export function assertConvertible(meta: Metadata): void {
+  if (!isSupported(meta)) {
+    throw new UnsupportedImageError();
+  }
+  if ((meta.width ?? 0) * (meta.height ?? 0) > MAX_PIXELS) {
+    throw new TooManyPixelsError();
+  }
+}
+
 /**
  * Re-encodes an upload as a JPEG that fits MAX_SIDE, keeping only the EXIF
  * Orientation tag (no GPS, camera or other metadata). Pixels aren't rotated:
@@ -52,12 +62,7 @@ export async function processPhoto(
   } catch {
     throw new UnsupportedImageError();
   }
-  if (!isSupported(meta)) {
-    throw new UnsupportedImageError();
-  }
-  if ((meta.width ?? 0) * (meta.height ?? 0) > MAX_PIXELS) {
-    throw new TooManyPixelsError();
-  }
+  assertConvertible(meta);
   const orientation = meta.orientation ?? 1;
 
   let out: { data: Buffer; info: OutputInfo };

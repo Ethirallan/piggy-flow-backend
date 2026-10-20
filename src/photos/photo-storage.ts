@@ -25,7 +25,7 @@ export interface StoredPhoto {
 /** Photo files on local disk: `<uploads>/<photo id>.jpg`. */
 @Injectable()
 export class PhotoStorage implements OnModuleInit {
-  constructor(@Inject(UPLOADS_DIR) private readonly dir: string) {}
+  constructor(@Inject(UPLOADS_DIR) readonly dir: string) {}
 
   /** Where multer streams uploads before they're processed. */
   get incomingDir(): string {

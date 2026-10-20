@@ -1,5 +1,7 @@
 import { planImport, type V2User } from './plan.js';
-import { formatReport } from './report.js';
+import { ImportError } from './apply.js';
+import { DumpParseError } from './parse-dump.js';
+import { formatError, formatReport } from './report.js';
 import { v1Tables } from './testing/v1-tables.js';
 import { toSnapshot } from './v1-snapshot.js';
 
@@ -18,18 +20,19 @@ describe('formatReport', () => {
   });
 
   it('lists every account the import writes to, also one without bills', () => {
-    const lines = formatReport(plan, { unreferenced: ['orphan.jpg'] }).split(
-      '\n',
-    );
+    const lines = formatReport(plan, {
+      users: [v2Ana],
+      unreferenced: ['orphan.jpg'],
+    }).split('\n');
 
     expect(lines).toContain(
       'Car [ana@example.com]: 1 bills, 27.62 €, 0 subscriptions, 1 shops, 1 categories, 1 photos',
     );
     expect(lines).toContain(
-      'Personal (ana-pers): 0 bills, 0.00 €, 1 subscriptions, 0 shops, 0 categories, 0 photos',
+      'Personal (ana@example.com): 0 bills, 0.00 €, 1 subscriptions, 0 shops, 0 categories, 0 photos',
     );
     expect(lines).toContain(
-      '"Netflix" in Personal (ana-pers): 0 charges, latest none, last charged month 2026-10-01',
+      '"Netflix" in Personal (ana@example.com): 0 charges, latest none, last charged month 2026-10-01',
     );
     expect(lines).toContain('1: orphan.jpg');
     expect(lines.slice(-2)).toEqual([
@@ -40,6 +43,7 @@ describe('formatReport', () => {
 
   it('ends with the photo sizes after an apply', () => {
     const lines = formatReport(plan, {
+      users: [v2Ana],
       unreferenced: [],
       applied: { photos: 1, bytesBefore: 3_145_728, bytesAfter: 524_288 },
     }).split('\n');
@@ -48,5 +52,37 @@ describe('formatReport', () => {
       '== Applied',
       '1 photos, 3.0 MB → 0.5 MB',
     ]);
+  });
+});
+
+describe('formatError', () => {
+  it('prints the import’s own errors as they are', () => {
+    expect(
+      formatError(new ImportError('The v2 database already has data')),
+    ).toBe('The v2 database already has data');
+    expect(formatError(new DumpParseError('unknown escape', 7))).toBe(
+      'dump line 7: unknown escape',
+    );
+  });
+
+  it('gives a reason for other errors, also without a message', () => {
+    const refused = (address: string) =>
+      Object.assign(new Error(`connect ECONNREFUSED ${address}`), {
+        code: 'ECONNREFUSED',
+      });
+
+    expect(
+      formatError(
+        new AggregateError([refused('::1:5432'), refused('127.0.0.1:5432')]),
+      ),
+    ).toBe(
+      'AggregateError\n' +
+        '  Error (ECONNREFUSED): connect ECONNREFUSED ::1:5432\n' +
+        '  Error (ECONNREFUSED): connect ECONNREFUSED 127.0.0.1:5432',
+    );
+    expect(formatError(Object.assign(new Error(''), { code: 'EACCES' }))).toBe(
+      'Error (EACCES)',
+    );
+    expect(formatError('boom')).toBe('boom');
   });
 });

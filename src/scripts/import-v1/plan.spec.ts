@@ -57,7 +57,11 @@ describe('planImport', () => {
       toSnapshot(
         v1Tables({
           ...twoUsers,
-          bill: [bill(1), bill(2, { accountId: '1', price: '27.62' })],
+          bill: [
+            bill(1),
+            bill(2, { accountId: '1', price: '27.62' }),
+            bill(3, { userId: '2', price: '-5.00' }),
+          ],
           bill_photo: [],
         }),
       ),
@@ -86,11 +90,19 @@ describe('planImport', () => {
     ).toEqual([
       ['ana-personal', 1000, 'ana'],
       ['id-1', 2762, 'ana'],
+      ['bob-personal', -500, 'bob'],
     ]);
-    expect(plan.expected).toEqual([
-      { accountId: 'ana-personal', bills: 1, cents: 1000 },
-      { accountId: 'id-1', bills: 1, cents: 2762 },
-    ]);
+    expect(plan.v1Totals).toEqual({
+      perAccount: [
+        { accountId: 'ana-personal', bills: 1, cents: 1000 },
+        { accountId: 'id-1', bills: 1, cents: 2762 },
+        { accountId: 'bob-personal', bills: 1, cents: -500 },
+      ],
+      perUser: [
+        { userId: 'ana', bills: 2, cents: 3762 },
+        { userId: 'bob', bills: 1, cents: -500 },
+      ],
+    });
   });
 
   it('stops before writing when a user is not registered or a dismissed email is unknown', () => {
@@ -138,6 +150,10 @@ describe('planImport', () => {
 
     expect(plan.accounts.map((a) => a.name)).toEqual(['Car']);
     expect(plan.bills).toHaveLength(1);
+    expect(plan.v1Totals).toEqual({
+      perAccount: [{ accountId: 'ana-personal', bills: 1, cents: 1000 }],
+      perUser: [{ userId: 'ana', bills: 1, cents: 1000 }],
+    });
     expect(plan.report.leftOut).toEqual({
       users: ['bob@example.com'],
       accounts: ['Boat'],
@@ -186,6 +202,10 @@ describe('planImport', () => {
       null,
     ]);
     expect(plan.report.fixUps).toContain('bill 1: price 0, skipped');
+    expect(plan.v1Totals).toEqual({
+      perAccount: [{ accountId: 'ana-personal', bills: 2, cents: 2000 }],
+      perUser: [{ userId: 'ana', bills: 2, cents: 2000 }],
+    });
     expect(plan.report.fixUps).toContain(
       'bill 2: comment cut to 1000 characters',
     );

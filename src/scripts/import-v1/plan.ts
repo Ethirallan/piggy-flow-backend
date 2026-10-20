@@ -137,9 +137,21 @@ export interface Plan {
   subscriptions: NewSubscription[];
   bills: NewBill[];
   photos: NewPhoto[];
-  /** Per v2 account that receives bills: what the database must hold after the import. */
-  expected: { accountId: string; bills: number; cents: number }[];
+  /**
+   * Bill count and price sum per v2 account and per v2 user, counted from the
+   * v1 bills directly (not from `bills`), so the import can check what it wrote.
+   */
+  v1Totals: V1Totals;
   report: PlanReport;
+}
+
+export interface Totals {
+  bills: number;
+  cents: number;
+}
+export interface V1Totals {
+  perAccount: ({ accountId: string } & Totals)[];
+  perUser: ({ userId: string } & Totals)[];
 }
 
 export class PlanError extends Error {
@@ -436,12 +448,25 @@ export function planImport(
     throw new PlanError(problems);
   }
 
-  const totals = new Map<string, { bills: number; cents: number }>();
-  for (const b of bills) {
-    const t = totals.get(b.accountId) ?? { bills: 0, cents: 0 };
+  // From the snapshot, not from `bills`: the import compares what it wrote with v1.
+  const perAccount = new Map<string, Totals>();
+  const perUser = new Map<string, Totals>();
+  const add = (totals: Map<string, Totals>, key: string, cents: number) => {
+    const t = totals.get(key) ?? { bills: 0, cents: 0 };
     t.bills++;
-    t.cents += b.priceCents;
-    totals.set(b.accountId, t);
+    t.cents += cents;
+    totals.set(key, t);
+  };
+  for (const b of snapshot.bills) {
+    const user = kept.get(b.userId);
+    const cents = toCents(b.price);
+    if (!user || cents === 0) continue;
+    const accountId =
+      b.accountId === null
+        ? user.personalAccountId
+        : accountIds.get(b.accountId)!;
+    add(perAccount, accountId, cents);
+    add(perUser, user.id, cents);
   }
   return {
     accounts,
@@ -451,7 +476,13 @@ export function planImport(
     subscriptions: subscriptionPlans.map((s) => s.row),
     bills,
     photos,
-    expected: [...totals].map(([accountId, t]) => ({ accountId, ...t })),
+    v1Totals: {
+      perAccount: [...perAccount].map(([accountId, t]) => ({
+        accountId,
+        ...t,
+      })),
+      perUser: [...perUser].map(([userId, t]) => ({ userId, ...t })),
+    },
     report,
   };
 }

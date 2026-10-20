@@ -1,19 +1,23 @@
-import type { ApplyResult } from './apply.js';
-import type { Plan } from './plan.js';
+import { ImportError, type ApplyResult } from './apply.js';
+import { DumpParseError } from './parse-dump.js';
+import { PlanError, type Plan, type V2User } from './plan.js';
+import { SnapshotError } from './v1-snapshot.js';
 
 const euros = (cents: number) => (cents / 100).toFixed(2);
 
 /** The dry-run / apply summary for the terminal. */
 export function formatReport(
   plan: Plan,
-  extra: { unreferenced: string[]; applied?: ApplyResult },
+  extra: { users: V2User[]; unreferenced: string[]; applied?: ApplyResult },
 ): string {
   const r = plan.report;
   const lines: string[] = [];
   const section = (title: string) => lines.push('', `== ${title}`);
   const nameOf = new Map(plan.accounts.map((a) => [a.id, a.name]));
-  const accountName = (id: string) =>
-    nameOf.get(id) ?? `Personal (${id.slice(0, 8)})`;
+  for (const u of extra.users) {
+    nameOf.set(u.personalAccountId, `Personal (${u.email})`);
+  }
+  const accountName = (id: string) => nameOf.get(id) ?? id;
   const emailOf = new Map(r.users.map((u) => [u.v2UserId, u.v1Email]));
 
   section('Users');
@@ -34,13 +38,13 @@ export function formatReport(
   }));
   const accountIds = new Set([
     ...plan.accounts.map((a) => a.id),
-    ...plan.expected.map((e) => e.accountId),
+    ...plan.v1Totals.perAccount.map((t) => t.accountId),
     ...[...plan.shops, ...plan.categories, ...plan.subscriptions].map(
       (row) => row.accountId,
     ),
   ]);
   for (const id of accountIds) {
-    const totals = plan.expected.find((e) => e.accountId === id);
+    const totals = plan.v1Totals.perAccount.find((t) => t.accountId === id);
     const members = plan.members
       .filter((m) => m.accountId === id)
       .map((m) => emailOf.get(m.userId) ?? m.userId);
@@ -99,4 +103,34 @@ export function formatReport(
     lines.push('Nothing was written. Run again with --apply to import.');
   }
   return lines.join('\n').trimStart();
+}
+
+/**
+ * The import's own errors as they are; for anything else (database, file
+ * system) a reason even when the message is empty, e.g. an AggregateError.
+ */
+export function formatError(error: unknown): string {
+  if (
+    error instanceof ImportError ||
+    error instanceof PlanError ||
+    error instanceof SnapshotError ||
+    error instanceof DumpParseError
+  ) {
+    return error.message;
+  }
+  if (!(error instanceof Error)) {
+    return String(error);
+  }
+  const code = (error as { code?: unknown }).code;
+  const head =
+    error.name +
+    (typeof code === 'string' ? ` (${code})` : '') +
+    (error.message ? `: ${error.message}` : '');
+  const nested =
+    error instanceof AggregateError
+      ? (error.errors as unknown[]).map(
+          (e) => `  ${formatError(e).replaceAll('\n', '\n  ')}`,
+        )
+      : [];
+  return [head, ...nested].join('\n');
 }

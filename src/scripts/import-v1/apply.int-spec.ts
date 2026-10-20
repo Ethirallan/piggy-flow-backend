@@ -1,10 +1,14 @@
-import { mkdtemp, readdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { TestingModule } from '@nestjs/testing';
 import sharp from 'sharp';
 import { DataSource } from 'typeorm';
-import { createIntegrationModule, truncateTables } from '../../../test/db.js';
+import {
+  createIntegrationModule,
+  truncateTables,
+  waitForLockWait,
+} from '../../../test/db.js';
 import { AccountsService } from '../../accounts/accounts.service.js';
 import { BillsModule } from '../../bills/bills.module.js';
 import { BillsService } from '../../bills/bills.service.js';
@@ -18,6 +22,8 @@ import {
   applyPlan,
   assertV2Empty,
   checkSources,
+  checkTarget,
+  IMPORT_LOCK,
   ImportError,
   loadV2Users,
 } from './apply.js';
@@ -51,6 +57,30 @@ CREATE TABLE \`subscription\` (\`id\` int);
 INSERT INTO \`subscription\` (\`id\`, \`chargeDay\`, \`price\`, \`name\`, \`created\`, \`lastUpdate\`, \`userId\`, \`accountId\`, \`shopId\`, \`categoryId\`) VALUES
 (1, 4, 9.99, 'Netflix', '2025-01-01 10:00:00.000000', '2025-01-01 10:00:00.000000', 1, NULL, NULL, NULL);
 `;
+
+const TWO_PHOTOS = DUMP.replace(
+  "(1, 'IMG_1.jpg', 'p1.jpg', 'x', '2025-07-12 08:00:00.000000', 1);",
+  "(1, 'IMG_1.jpg', 'p1.jpg', 'x', '2025-07-12 08:00:00.000000', 1),\n(2, 'IMG_2.jpg', 'p1.jpg', 'x', '2025-07-12 08:00:00.000000', 1);",
+);
+const WITH_BOB = DUMP.replace(
+  "'Ana', '2025-01-01 10:00:00.000000', '2025-01-01 10:00:00.000000');",
+  "'Ana', '2025-01-01 10:00:00.000000', '2025-01-01 10:00:00.000000'),\n(2, 'u2', 'bob@example.com', 'Bob', '2025-01-01 10:00:00.000000', '2025-01-01 10:00:00.000000');",
+).replace(
+  '1, NULL, NULL, NULL);\nCREATE TABLE `bill_photo`',
+  "1, NULL, NULL, NULL),\n(3, '2026-10-05 06:00:00', 5.00, NULL, '2026-10-05 06:00:00.000000', '2026-10-05 06:00:00.000000', 2, NULL, NULL, NULL);\nCREATE TABLE `bill_photo`",
+);
+
+/** Fails to delete the first file it is asked to. */
+class FlakyStorage extends PhotoStorage {
+  failed = false;
+  override async delete(id: string): Promise<void> {
+    if (!this.failed) {
+      this.failed = true;
+      throw new Error('disk gone');
+    }
+    await super.delete(id);
+  }
+}
 
 describe('import-v1 apply (integration)', () => {
   let moduleRef: TestingModule;
@@ -179,7 +209,7 @@ describe('import-v1 apply (integration)', () => {
   it('rolls back and deletes written photos when the totals check fails', async () => {
     await register('ana@example.com');
     const plan = await planFor();
-    plan.expected[0].cents += 1;
+    plan.bills[0].priceCents += 1;
 
     await expect(applyPlan(dataSource, plan, source, storage)).rejects.toThrow(
       'Totals differ',
@@ -211,6 +241,107 @@ describe('import-v1 apply (integration)', () => {
     expect(
       await dataSource.query('SELECT count(*)::int AS n FROM bills'),
     ).toEqual([{ n: 0 }]);
+  });
+
+  it('rolls back when the bills match per account but not per user', async () => {
+    await register('ana@example.com');
+    const bob = await register('bob@example.com');
+    const plan = await planFor(WITH_BOB);
+    expect(WITH_BOB).toContain("(3, '2026-10-05 06:00:00', 5.00");
+    // Same account (Ana's Personal), so only the per-user totals change.
+    const netflix = plan.bills.find((b) => b.comment === 'Netflix')!;
+    netflix.createdById = bob.id;
+    netflix.updatedById = bob.id;
+
+    await expect(applyPlan(dataSource, plan, source, storage)).rejects.toThrow(
+      /Totals differ for user/,
+    );
+    expect(
+      await dataSource.query('SELECT count(*)::int AS n FROM bills'),
+    ).toEqual([{ n: 0 }]);
+  });
+
+  it('deletes every written photo even when one delete fails, and keeps the original error', async () => {
+    await register('ana@example.com');
+    const plan = await planFor(TWO_PHOTOS);
+    plan.bills[0].priceCents += 1;
+    const flaky = new FlakyStorage(storageDir);
+
+    await expect(applyPlan(dataSource, plan, source, flaky)).rejects.toThrow(
+      'Totals differ',
+    );
+    expect(flaky.failed).toBe(true);
+    expect(await v2Files()).toHaveLength(1); // only the one whose delete failed
+  });
+
+  it('lets only one of two concurrent imports write', async () => {
+    await register('ana@example.com');
+    const [first, second] = [await planFor(), await planFor()];
+    // Hold the import lock so both runs are inside their transactions at once.
+    const holder = dataSource.createQueryRunner();
+    await holder.connect();
+    await holder.startTransaction();
+    await holder.query('SELECT pg_advisory_xact_lock($1)', [IMPORT_LOCK]);
+    const running = Promise.allSettled([
+      applyPlan(dataSource, first, source, storage),
+      applyPlan(dataSource, second, source, storage),
+    ]);
+    await waitForLockWait(dataSource);
+    await holder.commitTransaction();
+    await holder.release();
+    const results = await running;
+
+    expect(results.map((r) => r.status).sort()).toEqual([
+      'fulfilled',
+      'rejected',
+    ]);
+    const rejected = results.find((r) => r.status === 'rejected');
+    expect(String(rejected?.reason)).toContain(
+      'The v2 database already has data',
+    );
+    expect(
+      await dataSource.query('SELECT count(*)::int AS n FROM bills'),
+    ).toEqual([{ n: 2 }]);
+    expect(await v2Files()).toHaveLength(1);
+  });
+
+  it('refuses photo files left in the target folder by an earlier run', async () => {
+    await register('ana@example.com');
+    await writeFile(join(storageDir, 'stale.jpg'), 'x');
+    await writeFile(join(storageDir, 'half.jpg.tmp'), 'x');
+
+    await expect(checkTarget(storageDir)).rejects.toThrow(
+      `2 photo files are already in ${storageDir}`,
+    );
+    await expect(
+      applyPlan(dataSource, await planFor(), source, storage),
+    ).rejects.toThrow(ImportError);
+    expect(
+      await dataSource.query('SELECT count(*)::int AS n FROM bills'),
+    ).toEqual([{ n: 0 }]);
+    expect(await readdir(storageDir)).toEqual(
+      expect.arrayContaining(['stale.jpg', 'half.jpg.tmp']),
+    );
+    expect(await v2Files()).toEqual(['stale.jpg']);
+  });
+
+  it('creates a missing target folder', async () => {
+    const target = join(storageDir, 'nested', 'uploads');
+    await checkTarget(target);
+    expect(await readdir(target)).toEqual([]);
+    await rm(join(storageDir, 'nested'), { recursive: true });
+  });
+
+  it('reports a source file that is not a supported image in the dry run', async () => {
+    await register('ana@example.com');
+    await writeFile(join(source, 'bad.jpg'), 'not an image');
+    const plan = await planFor(
+      TWO_PHOTOS.replace("'IMG_2.jpg', 'p1.jpg'", "'IMG_2.jpg', 'bad.jpg'"),
+    );
+
+    await expect(checkSources(plan, source)).rejects.toThrow(
+      `Photo files that can't be converted in ${source}: bad.jpg`,
+    );
   });
 
   it('reports a missing source file before anything is written', async () => {
