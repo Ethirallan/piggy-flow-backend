@@ -125,17 +125,11 @@ function placeAll(
   const ids = new Map<string, string>();
   const firstOf = new Map<string, V1Shop>();
   for (const group of groups.values()) {
-    group.lists.sort(
-      (a, b) => a.created.localeCompare(b.created) || a.id - b.id,
+    group.lists.sort((a, b) =>
+      a.created < b.created ? -1 : a.created > b.created ? 1 : a.id - b.id,
     );
     const first = group.lists[0];
-    let name = first.name.trim();
-    if (Array.from(name).length > NAME_MAX) {
-      name = cutCodePoints(name, NAME_MAX);
-      report.fixUps.push(
-        `${kind} ${first.id}: name cut to ${NAME_MAX} characters`,
-      );
-    }
+    const name = storedName.get(first.id)!;
     const id = newId();
     rows.push({
       id,

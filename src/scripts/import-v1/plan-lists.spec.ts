@@ -166,12 +166,24 @@ describe('shops and categories', () => {
     expect(new Set(result.bills.map((b) => b.shopId))).toEqual(
       new Set([result.shops[0].id]),
     );
-    expect(result.report.fixUps).toContain(
+    expect(result.report.fixUps.filter((l) => l.includes('name cut'))).toEqual([
       'shop 1: name cut to 100 characters',
-    );
+      'shop 2: name cut to 100 characters',
+    ]);
     expect(result.report.merged).toEqual([
       { kind: 'shop', accountId: 'ana-personal', name: long, v1Ids: [1, 2] },
     ]);
+  });
+
+  it('trims again after cutting a name', () => {
+    const cut = `${'y'.repeat(99)} z`;
+    const result = plan({
+      shop: [shop(1, cut, 1)],
+      category: [],
+      bill: [bill(1, null, '1')],
+    });
+
+    expect(result.shops.map((s) => s.name)).toEqual(['y'.repeat(99)]);
   });
 
   it('drops an unused shop of a dismissed owner', () => {
