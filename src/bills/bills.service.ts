@@ -18,14 +18,17 @@ import {
   ACCOUNT_NOT_FOUND,
   AccountsService,
 } from '../accounts/accounts.service.js';
-import { Category } from '../categories/category.entity.js';
+import {
+  assertListsInAccount,
+  CATEGORY_NOT_IN_ACCOUNT,
+  SHOP_NOT_IN_ACCOUNT,
+} from '../common/account-lists.js';
 import {
   isForeignKeyViolation,
   violatedConstraint,
 } from '../common/db-errors.js';
 import { BillPhoto } from '../photos/bill-photo.entity.js';
 import { PhotoStorage } from '../photos/photo-storage.js';
-import { Shop } from '../shops/shop.entity.js';
 import {
   Bill,
   BILL_ACCOUNT_FK,
@@ -35,8 +38,10 @@ import {
 import { decodeBillCursor, encodeBillCursor } from './bill-cursor.js';
 
 export const BILL_NOT_FOUND = 'Bill not found';
-export const SHOP_NOT_IN_ACCOUNT = 'Shop is not in this account';
-export const CATEGORY_NOT_IN_ACCOUNT = 'Category is not in this account';
+export {
+  CATEGORY_NOT_IN_ACCOUNT,
+  SHOP_NOT_IN_ACCOUNT,
+} from '../common/account-lists.js';
 
 export const BILL_PAGE_SIZE = 50;
 export const BILL_PAGE_MAX = 100;
@@ -143,7 +148,12 @@ export class BillsService {
     await this.accounts.findForMember(input.accountId, userId);
     const shopId = input.shopId ?? null;
     const categoryId = input.categoryId ?? null;
-    await this.assertInAccount(input.accountId, shopId, categoryId);
+    await assertListsInAccount(
+      this.dataSource.manager,
+      input.accountId,
+      shopId,
+      categoryId,
+    );
     let id: string;
     try {
       ({ id } = await this.bills.save(
@@ -185,7 +195,12 @@ export class BillsService {
     const shopId = changes.shopId !== undefined ? changes.shopId : bill.shopId;
     const categoryId =
       changes.categoryId !== undefined ? changes.categoryId : bill.categoryId;
-    await this.assertInAccount(accountId, shopId, categoryId);
+    await assertListsInAccount(
+      this.dataSource.manager,
+      accountId,
+      shopId,
+      categoryId,
+    );
 
     const set: Partial<
       Pick<
@@ -361,30 +376,6 @@ export class BillsService {
       .addSelect(['createdBy.id', 'createdBy.displayName'])
       .leftJoin('bill.updatedBy', 'updatedBy')
       .addSelect(['updatedBy.id', 'updatedBy.displayName']);
-  }
-
-  /** 400 unless the shop and category (when set) belong to the account. */
-  private async assertInAccount(
-    accountId: string,
-    shopId: string | null,
-    categoryId: string | null,
-  ): Promise<void> {
-    if (
-      shopId !== null &&
-      !(await this.dataSource
-        .getRepository(Shop)
-        .existsBy({ id: shopId, accountId }))
-    ) {
-      throw new BadRequestException(SHOP_NOT_IN_ACCOUNT);
-    }
-    if (
-      categoryId !== null &&
-      !(await this.dataSource
-        .getRepository(Category)
-        .existsBy({ id: categoryId, accountId }))
-    ) {
-      throw new BadRequestException(CATEGORY_NOT_IN_ACCOUNT);
-    }
   }
 }
 

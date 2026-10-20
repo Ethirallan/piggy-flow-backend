@@ -13,6 +13,7 @@ import { ShopsModule } from './shops/shops.module.js';
 import { CategoriesModule } from './categories/categories.module.js';
 import { BillsModule } from './bills/bills.module.js';
 import { PhotosModule } from './photos/photos.module.js';
+import { SubscriptionsModule } from './subscriptions/subscriptions.module.js';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { PhotosModule } from './photos/photos.module.js';
     CategoriesModule,
     BillsModule,
     PhotosModule,
+    SubscriptionsModule,
     AuthModule,
   ],
   controllers: [AppController],

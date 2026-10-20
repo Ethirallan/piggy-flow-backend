@@ -13,6 +13,7 @@ import {
 import { Account } from '../accounts/account.entity.js';
 import { Category } from '../categories/category.entity.js';
 import { Shop } from '../shops/shop.entity.js';
+import { Subscription } from '../subscriptions/subscription.entity.js';
 import type { BillPhoto } from '../photos/bill-photo.entity.js';
 import { User } from '../users/user.entity.js';
 
@@ -20,6 +21,7 @@ import { User } from '../users/user.entity.js';
 export const BILL_ACCOUNT_FK = 'FK_bills_account';
 export const BILL_SHOP_FK = 'FK_bills_shop';
 export const BILL_CATEGORY_FK = 'FK_bills_category';
+export const BILL_SUBSCRIPTION_FK = 'FK_bills_subscription';
 export const BILL_PRICE_CHECK = 'CHK_bills_price_cents_not_zero';
 
 /** Money spent (or refunded, when negative) at a moment, owned by an account. */
@@ -64,6 +66,18 @@ export class Bill {
 
   @Column({ type: 'varchar', length: 1000, nullable: true })
   comment: string | null;
+
+  /** The subscription that generated this bill; null for bills entered by hand. */
+  @Index('IDX_bills_subscription_id')
+  @Column({ name: 'subscription_id', type: 'uuid', nullable: true })
+  subscriptionId: string | null;
+
+  @ManyToOne(() => Subscription, { onDelete: 'SET NULL' })
+  @JoinColumn({
+    name: 'subscription_id',
+    foreignKeyConstraintName: BILL_SUBSCRIPTION_FK,
+  })
+  subscription?: Subscription | null;
 
   @Column({ name: 'created_by', type: 'uuid', nullable: true })
   createdById: string | null;
