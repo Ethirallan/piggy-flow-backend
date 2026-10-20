@@ -140,4 +140,92 @@ describe('SubscriptionsService (integration)', () => {
       constraint: SUBSCRIPTION_PRICE_CHECK,
     });
   });
+
+  describe('list, update and delete', () => {
+    it('lists the caller’s subscriptions by next charge date, then name', async () => {
+      const ana = await createUser();
+      const home = await accounts.create(ana.id, 'Home');
+      const trip = await accounts.create(ana.id, 'Trip');
+      const add = (accountId: string, chargeDay: number, name: string) =>
+        subscriptions.create(
+          ana.id,
+          { accountId, priceCents: 100, chargeDay, name },
+          '2026-10-20',
+        );
+      await add(home.id, 25, 'Rent');
+      await add(trip.id, 5, 'Phone');
+      await add(home.id, 25, 'Internet');
+
+      expect((await subscriptions.list(ana.id)).map((s) => s.name)).toEqual([
+        'Internet',
+        'Rent',
+        'Phone',
+      ]);
+      expect(
+        (await subscriptions.list(ana.id, trip.id)).map((s) => s.name),
+      ).toEqual(['Phone']);
+    });
+
+    it('moves the first charge when the day changes before this month was charged', async () => {
+      const ana = await createUser();
+      const home = await accounts.create(ana.id, 'Home');
+      const sub = await subscriptions.create(
+        ana.id,
+        { accountId: home.id, priceCents: 100, chargeDay: 25 },
+        '2026-10-20',
+      );
+
+      const updated = await subscriptions.update(
+        ana.id,
+        sub.id,
+        { chargeDay: 5, priceCents: 200, name: null },
+        '2026-10-20',
+      );
+
+      expect(updated).toMatchObject({
+        chargeDay: 5,
+        priceCents: 200,
+        name: null,
+        lastChargedMonth: '2026-10-01',
+        updatedBy: { id: ana.id },
+      });
+    });
+
+    it('answers 400 for nothing to update and when a move keeps a shop of the old account', async () => {
+      const ana = await createUser();
+      const home = await accounts.create(ana.id, 'Home');
+      const trip = await accounts.create(ana.id, 'Trip');
+      const lidl = await shops.create(home.id, ana.id, 'Lidl');
+      const sub = await subscriptions.create(ana.id, {
+        accountId: home.id,
+        priceCents: 100,
+        chargeDay: 1,
+        shopId: lidl.id,
+      });
+
+      await expect(subscriptions.update(ana.id, sub.id, {})).rejects.toThrow(
+        new BadRequestException('Nothing to update'),
+      );
+      await expect(
+        subscriptions.update(ana.id, sub.id, { accountId: trip.id }),
+      ).rejects.toThrow(new BadRequestException('Shop is not in this account'));
+    });
+
+    it('deletes a subscription; another member can, a non-member gets 404', async () => {
+      const ana = await createUser('ana@example.com');
+      const bob = await createUser('bob@example.com', 'Bob');
+      const home = await accounts.create(ana.id, 'Home');
+      const sub = await subscriptions.create(ana.id, {
+        accountId: home.id,
+        priceCents: 100,
+        chargeDay: 1,
+      });
+
+      await expect(subscriptions.delete(bob.id, sub.id)).rejects.toThrow(
+        new NotFoundException('Subscription not found'),
+      );
+      await subscriptions.delete(ana.id, sub.id);
+      expect(await count()).toBe(0);
+    });
+  });
 });
