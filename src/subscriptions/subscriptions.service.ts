@@ -151,6 +151,25 @@ export class SubscriptionsService {
     if (Object.values(changes).every((value) => value === undefined)) {
       throw new BadRequestException('Nothing to update');
     }
+    // A concurrent change (e.g. a charge between the read and the UPDATE)
+    // makes the pinned UPDATE miss: try once more against a fresh read.
+    for (let attempt = 1; ; attempt++) {
+      if (await this.tryUpdate(userId, id, changes, today)) {
+        return this.findForMember(id, userId);
+      }
+      if (attempt === 2) {
+        throw new NotFoundException(SUBSCRIPTION_NOT_FOUND);
+      }
+    }
+  }
+
+  /** One read-check-UPDATE pass; false when the row changed after it was read. */
+  private async tryUpdate(
+    userId: string,
+    id: string,
+    changes: SubscriptionChanges,
+    today: string,
+  ): Promise<boolean> {
     const current = await this.findForMember(id, userId);
     const accountId = changes.accountId ?? current.accountId;
     if (accountId !== current.accountId) {
@@ -219,10 +238,7 @@ export class SubscriptionsService {
     } catch (error) {
       rethrowSubscriptionWriteError(error);
     }
-    if (!affected) {
-      throw new NotFoundException(SUBSCRIPTION_NOT_FOUND);
-    }
-    return this.findForMember(id, userId);
+    return Boolean(affected);
   }
 
   /** Deletes it; its bills stay (their subscription_id becomes null). */
