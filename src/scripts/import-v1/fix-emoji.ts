@@ -3,7 +3,10 @@ import { isSingleEmoji } from '../../common/is-single-emoji.decorator.js';
 const SELECTOR = '️';
 
 /** v2's single-emoji check, with v1 values repaired by adding or removing U+FE0F when that's enough. */
-export function fixEmoji(emoji: string | null): { emoji: string | null; changed: boolean } {
+export function fixEmoji(emoji: string | null): {
+  emoji: string | null;
+  changed: boolean;
+} {
   if (emoji === null || emoji === '') {
     return { emoji: null, changed: false };
   }
