@@ -4,7 +4,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository, type SelectQueryBuilder } from 'typeorm';
+import {
+  DataSource,
+  IsNull,
+  Repository,
+  type SelectQueryBuilder,
+} from 'typeorm';
 import { AccountMember } from '../accounts/account-member.entity.js';
 import {
   ACCOUNT_NOT_FOUND,
@@ -19,7 +24,12 @@ import {
   isForeignKeyViolation,
   violatedConstraint,
 } from '../common/db-errors.js';
-import { initialLastChargedMonth, localToday } from './charge-schedule.js';
+import {
+  initialLastChargedMonth,
+  lastChargedMonthAfterDayChange,
+  localToday,
+  nextChargeDate,
+} from './charge-schedule.js';
 import {
   Subscription,
   SUBSCRIPTION_ACCOUNT_FK,
@@ -35,6 +45,18 @@ export interface SubscriptionInput {
   chargeDay: number;
   name?: string | null;
   shopId?: string | null;
+  categoryId?: string | null;
+}
+
+export interface SubscriptionChanges {
+  accountId?: string;
+  priceCents?: number;
+  chargeDay?: number;
+  /** null clears it. */
+  name?: string | null;
+  /** null clears it. */
+  shopId?: string | null;
+  /** null clears it. */
   categoryId?: string | null;
 }
 
@@ -93,8 +115,130 @@ export class SubscriptionsService {
     return this.findForMember(id, userId);
   }
 
+  /** The caller's subscriptions (or one account's), by next charge date, then name. */
+  async list(userId: string, accountId?: string): Promise<Subscription[]> {
+    if (accountId !== undefined) {
+      await this.accounts.findForMember(accountId, userId);
+    }
+    const query = this.visible(userId);
+    if (accountId !== undefined) {
+      query.andWhere('subscription.accountId = :accountId', { accountId });
+    }
+    const found = await query.getMany();
+    const key = (s: Subscription) =>
+      nextChargeDate(s.lastChargedMonth, s.chargeDay);
+    return found.sort(
+      (a, b) =>
+        key(a).localeCompare(key(b)) ||
+        (a.name ?? '').localeCompare(b.name ?? '', 'en', {
+          sensitivity: 'accent',
+        }) ||
+        a.createdAt.getTime() - b.createdAt.getTime(),
+    );
+  }
+
+  /**
+   * Partial update, incl. moving to another account (membership there, shop
+   * and category must exist there). A filtered UPDATE pinning what was read
+   * and checked — never save().
+   */
+  async update(
+    userId: string,
+    id: string,
+    changes: SubscriptionChanges,
+    today = localToday(),
+  ): Promise<Subscription> {
+    if (Object.values(changes).every((value) => value === undefined)) {
+      throw new BadRequestException('Nothing to update');
+    }
+    const current = await this.findForMember(id, userId);
+    const accountId = changes.accountId ?? current.accountId;
+    if (accountId !== current.accountId) {
+      await this.accounts.findForMember(accountId, userId);
+    }
+    const shopId =
+      changes.shopId !== undefined ? changes.shopId : current.shopId;
+    const categoryId =
+      changes.categoryId !== undefined
+        ? changes.categoryId
+        : current.categoryId;
+    await assertListsInAccount(
+      this.dataSource.manager,
+      accountId,
+      shopId,
+      categoryId,
+    );
+
+    const set: Partial<
+      Pick<
+        Subscription,
+        | 'accountId'
+        | 'priceCents'
+        | 'chargeDay'
+        | 'name'
+        | 'shopId'
+        | 'categoryId'
+        | 'lastChargedMonth'
+        | 'updatedById'
+      >
+    > = { updatedById: userId };
+    if (changes.accountId !== undefined) set.accountId = changes.accountId;
+    if (changes.priceCents !== undefined) set.priceCents = changes.priceCents;
+    if (changes.name !== undefined) set.name = normalizeName(changes.name);
+    if (changes.shopId !== undefined) set.shopId = changes.shopId;
+    if (changes.categoryId !== undefined) set.categoryId = changes.categoryId;
+    const dayChanged =
+      changes.chargeDay !== undefined &&
+      changes.chargeDay !== current.chargeDay;
+    if (changes.chargeDay !== undefined) set.chargeDay = changes.chargeDay;
+    if (dayChanged) {
+      set.lastChargedMonth = lastChargedMonthAfterDayChange(
+        current.lastChargedMonth,
+        changes.chargeDay!,
+        today,
+      );
+    }
+
+    let affected: number | null | undefined;
+    try {
+      ({ affected } = await this.subscriptions.update(
+        {
+          id,
+          accountId: current.accountId,
+          ...(changes.shopId === undefined && {
+            shopId: current.shopId ?? IsNull(),
+          }),
+          ...(changes.categoryId === undefined && {
+            categoryId: current.categoryId ?? IsNull(),
+          }),
+          // A run that charged meanwhile must not be undone.
+          ...(dayChanged && { lastChargedMonth: current.lastChargedMonth }),
+        },
+        set,
+      ));
+    } catch (error) {
+      rethrowSubscriptionWriteError(error);
+    }
+    if (!affected) {
+      throw new NotFoundException(SUBSCRIPTION_NOT_FOUND);
+    }
+    return this.findForMember(id, userId);
+  }
+
+  /** Deletes it; its bills stay (their subscription_id becomes null). */
+  async delete(userId: string, id: string): Promise<void> {
+    const current = await this.findForMember(id, userId);
+    const { affected } = await this.subscriptions.delete({
+      id,
+      accountId: current.accountId,
+    });
+    if (!affected) {
+      throw new NotFoundException(SUBSCRIPTION_NOT_FOUND);
+    }
+  }
+
   /** Subscriptions of the accounts `userId` belongs to, with what a response shows. */
-  protected visible(userId: string): SelectQueryBuilder<Subscription> {
+  private visible(userId: string): SelectQueryBuilder<Subscription> {
     return this.subscriptions
       .createQueryBuilder('subscription')
       .innerJoin(
