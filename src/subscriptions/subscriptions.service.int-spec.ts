@@ -1,12 +1,24 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import type { TestingModule } from '@nestjs/testing';
 import { DataSource, QueryFailedError } from 'typeorm';
-import { createIntegrationModule, truncateTables } from '../../test/db.js';
+import {
+  createIntegrationModule,
+  truncateTables,
+  waitForLockWait,
+} from '../../test/db.js';
 import { AccountsService } from '../accounts/accounts.service.js';
+import { Bill } from '../bills/bill.entity.js';
+import { BillsModule } from '../bills/bills.module.js';
 import { CategoriesModule } from '../categories/categories.module.js';
+import { CategoriesService } from '../categories/categories.service.js';
 import { ShopsModule } from '../shops/shops.module.js';
 import { ShopsService } from '../shops/shops.service.js';
 import { UsersService } from '../users/users.service.js';
+import { SubscriptionChargerService } from './subscription-charger.service.js';
 import {
   Subscription,
   SUBSCRIPTION_PRICE_CHECK,
@@ -19,6 +31,8 @@ describe('SubscriptionsService (integration)', () => {
   let subscriptions: SubscriptionsService;
   let accounts: AccountsService;
   let shops: ShopsService;
+  let categories: CategoriesService;
+  let charger: SubscriptionChargerService;
   let users: UsersService;
   let dataSource: DataSource;
 
@@ -28,12 +42,19 @@ describe('SubscriptionsService (integration)', () => {
 
   beforeAll(async () => {
     moduleRef = await createIntegrationModule({
-      imports: [SubscriptionsModule, ShopsModule, CategoriesModule],
+      imports: [
+        SubscriptionsModule,
+        BillsModule,
+        ShopsModule,
+        CategoriesModule,
+      ],
     });
     await moduleRef.init();
     subscriptions = moduleRef.get(SubscriptionsService);
     accounts = moduleRef.get(AccountsService);
     shops = moduleRef.get(ShopsService);
+    categories = moduleRef.get(CategoriesService);
+    charger = moduleRef.get(SubscriptionChargerService);
     users = moduleRef.get(UsersService);
     dataSource = moduleRef.get(DataSource);
   });
@@ -211,6 +232,35 @@ describe('SubscriptionsService (integration)', () => {
       ).rejects.toThrow(new BadRequestException('Shop is not in this account'));
     });
 
+    it('moves a subscription to another account with a shop of that account, or none', async () => {
+      const ana = await createUser();
+      const home = await accounts.create(ana.id, 'Home');
+      const trip = await accounts.create(ana.id, 'Trip');
+      const lidl = await shops.create(home.id, ana.id, 'Lidl');
+      const spar = await shops.create(trip.id, ana.id, 'Spar');
+      const sub = await subscriptions.create(ana.id, {
+        accountId: home.id,
+        priceCents: 100,
+        chargeDay: 1,
+        shopId: lidl.id,
+      });
+
+      const moved = await subscriptions.update(ana.id, sub.id, {
+        accountId: trip.id,
+        shopId: spar.id,
+      });
+      expect(moved.account?.id).toBe(trip.id);
+      expect(moved.shop?.id).toBe(spar.id);
+
+      const back = await subscriptions.update(ana.id, sub.id, {
+        accountId: home.id,
+        shopId: null,
+      });
+      expect(back.account?.id).toBe(home.id);
+      expect(back.shop).toBeNull();
+      expect(back.shopId).toBeNull();
+    });
+
     it('deletes a subscription; another member can, a non-member gets 404', async () => {
       const ana = await createUser('ana@example.com');
       const bob = await createUser('bob@example.com', 'Bob');
@@ -226,6 +276,175 @@ describe('SubscriptionsService (integration)', () => {
       );
       await subscriptions.delete(ana.id, sub.id);
       expect(await count()).toBe(0);
+    });
+  });
+
+  describe('deleting what subscriptions use', () => {
+    it('answers 409 for a shop or category a subscription uses', async () => {
+      const ana = await createUser();
+      const home = await accounts.create(ana.id, 'Home');
+      const netflix = await shops.create(home.id, ana.id, 'Netflix');
+      const fun = await categories.create(home.id, ana.id, { name: 'Fun' });
+      await subscriptions.create(ana.id, {
+        accountId: home.id,
+        priceCents: 1299,
+        chargeDay: 1,
+        shopId: netflix.id,
+        categoryId: fun.id,
+      });
+
+      await expect(shops.delete(home.id, ana.id, netflix.id)).rejects.toThrow(
+        new ConflictException('Shop is in use by subscriptions'),
+      );
+      await expect(categories.delete(home.id, ana.id, fun.id)).rejects.toThrow(
+        new ConflictException('Category is in use by subscriptions'),
+      );
+      expect(await shops.list(home.id, ana.id)).toHaveLength(1);
+      expect(await categories.list(home.id, ana.id)).toHaveLength(1);
+    });
+
+    it.each([
+      {
+        kind: 'shop',
+        column: 'shop_id',
+        message: 'Shop is in use by subscriptions',
+        make: async (accountId: string, userId: string) =>
+          (await shops.create(accountId, userId, 'Netflix')).id,
+        remove: (accountId: string, userId: string, id: string) =>
+          shops.delete(accountId, userId, id),
+      },
+      {
+        kind: 'category',
+        column: 'category_id',
+        message: 'Category is in use by subscriptions',
+        make: async (accountId: string, userId: string) =>
+          (await categories.create(accountId, userId, { name: 'Fun' })).id,
+        remove: (accountId: string, userId: string, id: string) =>
+          categories.delete(accountId, userId, id),
+      },
+    ])(
+      'answers 409 for a $kind through the foreign key when a subscription is saved during the delete',
+      async ({ column, message, make, remove }) => {
+        const ana = await createUser();
+        const home = await accounts.create(ana.id, 'Home');
+        const usedId = await make(home.id, ana.id);
+
+        // An uncommitted subscription: the usage check can't see it, but its
+        // insert holds FOR KEY SHARE on the row, so the delete blocks until
+        // the commit and then trips the RESTRICT foreign key.
+        const runner = dataSource.createQueryRunner();
+        await runner.connect();
+        await runner.startTransaction();
+        let committed = false;
+        try {
+          await runner.manager.query(
+            `INSERT INTO subscriptions (account_id, price_cents, charge_day, last_charged_month, ${column})
+             VALUES ($1, 100, 1, '2026-09-01', $2)`,
+            [home.id, usedId],
+          );
+          const deleting = remove(home.id, ana.id, usedId).then(
+            () => 'deleted',
+            (error: unknown) => error,
+          );
+          await waitForLockWait(dataSource);
+          await runner.commitTransaction();
+          committed = true;
+
+          expect(await deleting).toEqual(new ConflictException(message));
+          expect(await count()).toBe(1);
+        } finally {
+          if (!committed) await runner.rollbackTransaction();
+          await runner.release();
+        }
+      },
+    );
+
+    it('deletes an account’s subscriptions with the account', async () => {
+      const ana = await createUser();
+      const home = await accounts.create(ana.id, 'Home');
+      // Its shop and category cascade too: the RESTRICT keys must not block.
+      const netflix = await shops.create(home.id, ana.id, 'Netflix');
+      const fun = await categories.create(home.id, ana.id, { name: 'Fun' });
+      await subscriptions.create(ana.id, {
+        accountId: home.id,
+        priceCents: 100,
+        chargeDay: 1,
+        shopId: netflix.id,
+        categoryId: fun.id,
+      });
+
+      await expect(accounts.delete(home.id, ana.id)).resolves.toBeUndefined();
+      expect(await count()).toBe(0);
+    });
+
+    it('keeps the bills when a subscription is deleted', async () => {
+      const ana = await createUser();
+      const home = await accounts.create(ana.id, 'Home');
+      const sub = await subscriptions.create(
+        ana.id,
+        { accountId: home.id, priceCents: 1299, chargeDay: 25 },
+        '2026-09-20',
+      );
+      expect(await charger.run('2026-09-25')).toBe(1);
+      const [charged] = await dataSource.getRepository(Bill).find();
+      expect(charged.subscriptionId).toBe(sub.id);
+
+      await subscriptions.delete(ana.id, sub.id);
+
+      expect(await dataSource.getRepository(Bill).find()).toEqual([
+        expect.objectContaining({
+          id: charged.id,
+          priceCents: 1299,
+          subscriptionId: null,
+        }),
+      ]);
+    });
+
+    it('does not deadlock when an account is deleted while it is being charged', async () => {
+      const ana = await createUser();
+      const home = await accounts.create(ana.id, 'Home');
+      const sub = await subscriptions.create(
+        ana.id,
+        { accountId: home.id, priceCents: 1299, chargeDay: 25 },
+        '2026-09-20',
+      );
+
+      // The charger's locks, in its order: account, then subscription.
+      const runner = dataSource.createQueryRunner();
+      await runner.connect();
+      await runner.startTransaction();
+      let committed = false;
+      try {
+        await runner.manager.query(
+          'SELECT 1 FROM accounts WHERE id = $1 FOR KEY SHARE',
+          [home.id],
+        );
+        await runner.manager.query(
+          'SELECT 1 FROM subscriptions WHERE id = $1 FOR NO KEY UPDATE',
+          [sub.id],
+        );
+        const deleting = accounts.delete(home.id, ana.id).then(
+          () => 'deleted',
+          (error: unknown) => error,
+        );
+        await waitForLockWait(dataSource);
+        await runner.manager.getRepository(Bill).insert({
+          accountId: home.id,
+          date: new Date('2026-09-24T22:00:00.000Z'),
+          priceCents: 1299,
+          subscriptionId: sub.id,
+        });
+        await runner.commitTransaction();
+        committed = true;
+
+        expect(await deleting).toEqual(
+          new ConflictException('Account still has bills'),
+        );
+        expect(await count()).toBe(1);
+      } finally {
+        if (!committed) await runner.rollbackTransaction();
+        await runner.release();
+      }
     });
   });
 });

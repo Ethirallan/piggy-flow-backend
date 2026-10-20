@@ -81,9 +81,9 @@ export function initialLastChargedMonth(
 
 /**
  * After the charge day changes: an already charged month stays charged (the
- * new day applies from next month); if the new day has passed this month,
- * the first charge is next month; otherwise nothing changes, so months missed
- * during downtime stay due.
+ * new day applies from next month). If only last month was charged and the
+ * new day has already passed this month, the first charge is next month.
+ * Otherwise nothing changes, so months missed during downtime stay due.
  */
 export function lastChargedMonthAfterDayChange(
   lastChargedMonth: string,
@@ -95,7 +95,8 @@ export function lastChargedMonthAfterDayChange(
   if (lastChargedMonth >= thisMonth) {
     return lastChargedMonth;
   }
-  return chargeDate(current.year, current.month, newChargeDay) < today
+  return lastChargedMonth === firstDay(addMonths(current, -1)) &&
+    chargeDate(current.year, current.month, newChargeDay) < today
     ? thisMonth
     : lastChargedMonth;
 }

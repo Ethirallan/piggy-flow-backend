@@ -80,6 +80,12 @@ describe('charge schedule', () => {
       '2026-09-01',
     ],
     ['keeps missed earlier months due', '2026-06-01', 25, '2026-06-01'],
+    [
+      'keeps missed months due even when the new day has passed',
+      '2026-06-01',
+      5,
+      '2026-06-01',
+    ],
   ])('lastChargedMonthAfterDayChange %s', (_case, last, day, expected) => {
     expect(lastChargedMonthAfterDayChange(last, day, '2026-10-20')).toBe(
       expected,

@@ -118,6 +118,10 @@ export class CategoriesController {
     description:
       'No such account, the current user is not a member, or the category is not in this account',
   })
+  @ApiConflictResponse({
+    description:
+      'Bills or subscriptions of the account still use this category',
+  })
   delete(
     @CurrentUser() auth: AuthContext,
     @Param('accountId', ParseUUIDPipe) accountId: string,
