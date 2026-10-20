@@ -1,4 +1,3 @@
-import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import dataSource from '../../database-source.js';
@@ -7,10 +6,12 @@ import { localToday } from '../../subscriptions/charge-schedule.js';
 import {
   applyPlan,
   assertV2Empty,
+  checkFolders,
   checkSources,
   checkTarget,
   ImportError,
   loadV2Users,
+  readDump,
 } from './apply.js';
 import { parseDump } from './parse-dump.js';
 import { planImport } from './plan.js';
@@ -32,11 +33,18 @@ async function main(): Promise<void> {
   if (!values.dump || !values.uploads) {
     throw new ImportError(USAGE);
   }
-  const snapshot = toSnapshot(parseDump(await readFile(values.dump, 'utf8')));
+  const snapshot = toSnapshot(parseDump(await readDump(values.dump)));
   const targetDir = resolve(process.env.UPLOADS_DIR || 'uploads');
+  const { host, port, database } = dataSource.options as {
+    host?: string;
+    port?: number;
+    database?: string;
+  };
+  const target = { host, port, database, uploads: targetDir };
   await dataSource.initialize(); // runs pending migrations (migrationsRun)
   try {
     await assertV2Empty(dataSource);
+    await checkFolders(values.uploads, targetDir);
     await checkTarget(targetDir);
     const users = await loadV2Users(dataSource);
     const plan = planImport(snapshot, users, {
@@ -48,13 +56,19 @@ async function main(): Promise<void> {
     });
     const sources = await checkSources(plan, values.uploads);
     if (!values.apply) {
-      console.log(formatReport(plan, { users, ...sources }));
+      console.log(formatReport(plan, { target, users, ...sources }));
       return;
     }
     // Not onModuleInit(): that clears the running app's in-progress uploads.
     const storage = new PhotoStorage(targetDir);
-    const applied = await applyPlan(dataSource, plan, values.uploads, storage);
-    console.log(formatReport(plan, { users, ...sources, applied }));
+    const applied = await applyPlan(
+      dataSource,
+      plan,
+      values.uploads,
+      storage,
+      (message) => process.stderr.write(`${message}\n`),
+    );
+    console.log(formatReport(plan, { target, users, ...sources, applied }));
   } finally {
     await dataSource.destroy();
   }

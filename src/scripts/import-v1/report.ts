@@ -5,13 +5,29 @@ import { SnapshotError } from './v1-snapshot.js';
 
 const euros = (cents: number) => (cents / 100).toFixed(2);
 
+/** Where the import writes, so the report shows it is the right database. */
+export interface ReportTarget {
+  host: string | undefined;
+  port: number | undefined;
+  database: string | undefined;
+  uploads: string;
+}
+
 /** The dry-run / apply summary for the terminal. */
 export function formatReport(
   plan: Plan,
-  extra: { users: V2User[]; unreferenced: string[]; applied?: ApplyResult },
+  extra: {
+    target: ReportTarget;
+    users: V2User[];
+    unreferenced: string[];
+    applied?: ApplyResult;
+  },
 ): string {
   const r = plan.report;
-  const lines: string[] = [];
+  const { host, port, database, uploads } = extra.target;
+  const lines: string[] = [
+    `Target: postgres ${host}:${port}/${database}, uploads ${uploads}`,
+  ];
   const section = (title: string) => lines.push('', `== ${title}`);
   const nameOf = new Map(plan.accounts.map((a) => [a.id, a.name]));
   for (const u of extra.users) {
@@ -77,9 +93,18 @@ export function formatReport(
 
   section('Subscriptions');
   for (const s of r.subscriptions) {
+    const latest = s.latest
+      ? `${s.latest} (Ljubljana ${s.latestLocalDate})`
+      : 'none';
     lines.push(
-      `"${s.name ?? '(no name)'}" in ${accountName(s.accountId)}: ${s.matches} charges, latest ${s.latest ?? 'none'}, last charged month ${s.lastChargedMonth}`,
+      `"${s.name ?? '(no name)'}" in ${accountName(s.accountId)}: ${s.matches} charges, latest ${latest}, ` +
+        `last charged month ${s.lastChargedMonth}, will be charged at next startup: ${s.dueAtStartup.join(', ') || 'none'}`,
     );
+    if (s.chargedAhead) {
+      lines.push(
+        `  warning: the charge date of ${s.lastChargedMonth}’s month is after the import day; check that v1 really charged it`,
+      );
+    }
   }
 
   section('Fix-ups');

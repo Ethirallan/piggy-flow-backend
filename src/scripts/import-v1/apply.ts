@@ -1,6 +1,13 @@
 import { constants } from 'node:fs';
-import { access, mkdir, readdir, readFile, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import {
+  access,
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  stat,
+} from 'node:fs/promises';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import sharp from 'sharp';
 import type {
   DataSource,
@@ -114,10 +121,59 @@ export async function checkSources(
   };
 }
 
+/** The dump file's text; invalid UTF-8 stops the import (a BOM is dropped). */
+export async function readDump(path: string): Promise<string> {
+  const bytes = await readFile(path);
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    throw new ImportError(`The dump ${path} is not valid UTF-8`);
+  }
+}
+
+/**
+ * The v1 photos and the v2 uploads must be separate folders, neither inside
+ * the other: v1 files are named `<uuid>.<ext>` too, and a cleanup of the v2
+ * folder must never touch a v1 original. Writes nothing.
+ */
+export async function checkFolders(
+  sourceDir: string,
+  targetDir: string,
+): Promise<void> {
+  let source: string;
+  try {
+    source = await realpath(sourceDir);
+  } catch {
+    throw new ImportError(`The v1 photo folder ${sourceDir} doesn't exist.`);
+  }
+  const target = await realpathOfNew(targetDir);
+  const within = (a: string, b: string) => a === b || a.startsWith(b + sep);
+  if (within(source, target) || within(target, source)) {
+    throw new ImportError(
+      '--uploads and UPLOADS_DIR must be different folders; copy the v1 photos elsewhere and pass that as --uploads',
+    );
+  }
+}
+
+/** realpath of a folder that may not exist yet (its nearest existing parent's, plus the rest). */
+async function realpathOfNew(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch {
+    const parent = dirname(resolve(path));
+    return parent === resolve(path)
+      ? parent
+      : join(await realpathOfNew(parent), basename(path));
+  }
+}
+
+/** Names PhotoStorage gives v2 photo files (and their temp files). */
+const V2_PHOTO_FILE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jpg(\.tmp)?$/;
+
 /**
  * Creates the v2 uploads folder if needed and checks it is writable. It must
- * hold no photo files: v2 has no photo rows yet, so any are left over from an
- * interrupted run (or belong to another database).
+ * hold no v2 photo files: v2 has no photo rows yet.
  */
 export async function checkTarget(targetDir: string): Promise<void> {
   await mkdir(targetDir, { recursive: true });
@@ -127,12 +183,13 @@ export async function checkTarget(targetDir: string): Promise<void> {
     throw new ImportError(`The uploads folder ${targetDir} is not writable.`);
   }
   const photos = (await readdir(targetDir)).filter((f) =>
-    /\.jpg(\.tmp)?$/.test(f),
+    V2_PHOTO_FILE.test(f),
   );
   if (photos.length > 0) {
     throw new ImportError(
-      `${photos.length} photo files are already in ${targetDir}, but v2 has no photos; ` +
-        `they are left over from an earlier run. Remove them (*.jpg, *.jpg.tmp) and run again.`,
+      `${photos.length} photo files are in ${targetDir} but v2 has no photos. ` +
+        'If an interrupted import left them, delete them; if they are v1 originals, ' +
+        'move them elsewhere and pass that folder as --uploads.',
     );
   }
 }
@@ -147,8 +204,10 @@ export async function applyPlan(
   plan: Plan,
   sourceDir: string,
   storage: PhotoStorage,
+  progress: (message: string) => void = () => {},
 ): Promise<ApplyResult> {
   await assertV2Empty(dataSource);
+  await checkFolders(sourceDir, storage.dir);
   await checkTarget(storage.dir);
   const written: string[] = [];
   const result: ApplyResult = { photos: 0, bytesBefore: 0, bytesAfter: 0 };
@@ -169,6 +228,9 @@ export async function applyPlan(
       result.photos++;
       result.bytesBefore += input.length;
       result.bytesAfter += processed.jpeg.length;
+      if (result.photos % 50 === 0 || result.photos === plan.photos.length) {
+        progress(`photos ${result.photos}/${plan.photos.length}`);
+      }
       photoRows.push({
         id: photo.id,
         billId: photo.billId,
@@ -185,6 +247,7 @@ export async function applyPlan(
       await manager.query('SELECT pg_advisory_xact_lock($1)', [IMPORT_LOCK]);
       await manager.query('SET LOCAL statement_timeout = 0');
       await assertV2Empty(manager); // another run may have committed meanwhile
+      progress('writing rows…');
       await insert(manager, Account, plan.accounts);
       await insert(manager, AccountMember, plan.members);
       await insert(manager, Shop, plan.shops);
@@ -192,10 +255,35 @@ export async function applyPlan(
       await insert(manager, Subscription, plan.subscriptions);
       await insert(manager, Bill, plan.bills);
       await insert(manager, BillPhoto, photoRows);
+      progress('verifying totals…');
       await verifyTotals(manager, plan);
     });
+    progress('committed');
     return result;
   } catch (error) {
+    if (written.length === 0) {
+      throw error;
+    }
+    // The commit may have succeeded even though the call failed (e.g. the
+    // connection dropped on the reply): then the files belong to rows.
+    let committed: boolean | null;
+    try {
+      const rows: unknown[] = await dataSource.query(
+        'SELECT 1 FROM bill_photos WHERE id = ANY($1) LIMIT 1',
+        [plan.photos.map((p) => p.id)],
+      );
+      committed = rows.length > 0;
+    } catch {
+      committed = null;
+    }
+    if (committed !== false) {
+      throw new ImportError(
+        committed
+          ? `the import committed but reported an error (${messageOf(error)}); the photo files were kept. Check the result.`
+          : `the import failed (${messageOf(error)}) and whether it committed can't be checked; the photo files were kept in ${storage.dir}.`,
+        { cause: error },
+      );
+    }
     for (const id of written) {
       try {
         await storage.delete(id);

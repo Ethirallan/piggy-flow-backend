@@ -1,9 +1,17 @@
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { TestingModule } from '@nestjs/testing';
 import sharp from 'sharp';
-import { DataSource } from 'typeorm';
+import { DataSource, type EntityManager } from 'typeorm';
 import {
   createIntegrationModule,
   truncateTables,
@@ -22,10 +30,12 @@ import {
   applyPlan,
   assertV2Empty,
   checkSources,
+  checkFolders,
   checkTarget,
   IMPORT_LOCK,
   ImportError,
   loadV2Users,
+  readDump,
 } from './apply.js';
 import { parseDump } from './parse-dump.js';
 import { planImport } from './plan.js';
@@ -148,9 +158,18 @@ describe('import-v1 apply (integration)', () => {
     expect(await checkSources(plan, source)).toEqual({
       unreferenced: ['orphan.jpg'],
     });
-    const result = await applyPlan(dataSource, plan, source, storage);
+    const progress: string[] = [];
+    const result = await applyPlan(dataSource, plan, source, storage, (m) =>
+      progress.push(m),
+    );
 
     expect(result.photos).toBe(1);
+    expect(progress).toEqual([
+      'photos 1/1',
+      'writing rows…',
+      'verifying totals…',
+      'committed',
+    ]);
     const page = await moduleRef.get(BillsService).list(ana.id, { all: true });
     expect(
       page.items.map((b) => [
@@ -305,13 +324,18 @@ describe('import-v1 apply (integration)', () => {
     expect(await v2Files()).toHaveLength(1);
   });
 
-  it('refuses photo files left in the target folder by an earlier run', async () => {
+  it('refuses v2-named photo files in the target folder, ignoring other files', async () => {
     await register('ana@example.com');
-    await writeFile(join(storageDir, 'stale.jpg'), 'x');
-    await writeFile(join(storageDir, 'half.jpg.tmp'), 'x');
+    await writeFile(join(storageDir, 'IMG_0001.jpg'), 'x');
+    await checkTarget(storageDir); // not a v2 name: ignored
+    const stale = `${randomUUID()}.jpg`;
+    await writeFile(join(storageDir, stale), 'x');
+    await writeFile(join(storageDir, `${randomUUID()}.jpg.tmp`), 'x');
 
     await expect(checkTarget(storageDir)).rejects.toThrow(
-      `2 photo files are already in ${storageDir}`,
+      `2 photo files are in ${storageDir} but v2 has no photos. ` +
+        'If an interrupted import left them, delete them; if they are v1 originals, ' +
+        'move them elsewhere and pass that folder as --uploads.',
     );
     await expect(
       applyPlan(dataSource, await planFor(), source, storage),
@@ -319,10 +343,79 @@ describe('import-v1 apply (integration)', () => {
     expect(
       await dataSource.query('SELECT count(*)::int AS n FROM bills'),
     ).toEqual([{ n: 0 }]);
-    expect(await readdir(storageDir)).toEqual(
-      expect.arrayContaining(['stale.jpg', 'half.jpg.tmp']),
+    expect((await v2Files()).sort()).toEqual(['IMG_0001.jpg', stale].sort());
+  });
+
+  it('refuses the same or nested folders for the v1 photos and the v2 uploads', async () => {
+    const message =
+      '--uploads and UPLOADS_DIR must be different folders; copy the v1 photos elsewhere and pass that as --uploads';
+    const link = join(storageDir, 'link-to-source');
+    await symlink(source, link);
+
+    await expect(checkFolders(source, source)).rejects.toThrow(message);
+    await expect(checkFolders(source, link)).rejects.toThrow(message);
+    await expect(checkFolders(source, join(source, 'v2'))).rejects.toThrow(
+      message,
     );
-    expect(await v2Files()).toEqual(['stale.jpg']);
+    await mkdir(join(storageDir, 'v1'));
+    await expect(
+      checkFolders(join(storageDir, 'v1'), storageDir),
+    ).rejects.toThrow(message);
+    expect(await readdir(source)).not.toContain('v2'); // nothing created
+    await expect(checkFolders(source, join(source, 'a', 'b'))).rejects.toThrow(
+      message,
+    );
+    await expect(
+      checkFolders(source, join(storageDir, 'new', 'uploads')),
+    ).resolves.toBeUndefined();
+    await mkdir(`${source}-sibling`);
+    await expect(
+      checkFolders(source, `${source}-sibling`),
+    ).resolves.toBeUndefined();
+    await expect(checkFolders(source, storageDir)).resolves.toBeUndefined();
+
+    await register('ana@example.com');
+    await expect(
+      applyPlan(dataSource, await planFor(), source, new PhotoStorage(source)),
+    ).rejects.toThrow(message);
+    await rm(`${source}-sibling`, { recursive: true });
+  });
+
+  it('keeps the photo files when the transaction committed but reported an error', async () => {
+    await register('ana@example.com');
+    // The commit succeeds, then the call fails (e.g. the connection drops on the reply).
+    const flaky = new Proxy(dataSource, {
+      get(target, property, receiver) {
+        if (property === 'transaction') {
+          return async (run: (manager: EntityManager) => Promise<unknown>) => {
+            await target.transaction(run);
+            throw new Error('connection lost');
+          };
+        }
+        const value: unknown = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    await expect(
+      applyPlan(flaky, await planFor(), source, storage),
+    ).rejects.toThrow(/the import committed .*connection lost/s);
+    expect(
+      await dataSource.query('SELECT count(*)::int AS n FROM bills'),
+    ).toEqual([{ n: 2 }]);
+    expect(await v2Files()).toHaveLength(1);
+  });
+
+  it('reads the dump as strict UTF-8', async () => {
+    const good = join(source, 'good.sql');
+    const bad = join(source, 'bad.sql');
+    await writeFile(good, Buffer.from('\uFEFF-- ⛽ dump', 'utf8'));
+    await writeFile(bad, Buffer.from([0x2d, 0x2d, 0x20, 0xc3, 0x28]));
+
+    await expect(readDump(good)).resolves.toBe('-- ⛽ dump');
+    await expect(readDump(bad)).rejects.toThrow(
+      `The dump ${bad} is not valid UTF-8`,
+    );
   });
 
   it('creates a missing target folder', async () => {
