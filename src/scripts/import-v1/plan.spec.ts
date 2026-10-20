@@ -370,6 +370,120 @@ describe('planImport', () => {
     ]);
   });
 
+  it('stops on a bill with an impossible date, naming the bill', () => {
+    const run = () =>
+      planImport(
+        toSnapshot(
+          v1Tables({
+            bill: [
+              bill(1, { date: '0000-00-00 00:00:00' }),
+              bill(2, { created: '2025-02-30 10:00:00.000000' }),
+            ],
+            bill_photo: [],
+          }),
+        ),
+        [v2Ana],
+        { dismissedEmails: [], today: '2026-10-20' },
+      );
+
+    expect(run).toThrow(PlanError);
+    expect(run).toThrow('bill 1: invalid date "0000-00-00 00:00:00"');
+    expect(run).toThrow('bill 2: invalid date "2025-02-30 10:00:00.000000"');
+  });
+
+  it('takes the charged month whose charge date is nearest to the latest charge', () => {
+    // v1's cron ran by UTC day: a charge at 22:30 UTC on 30 Sep is 1 Oct in Ljubljana.
+    const charge = (id: number, name: string, utc: string) =>
+      bill(id, { comment: name, date: utc, created: `${utc}.100000` });
+    const plan = planImport(
+      toSnapshot(
+        v1Tables({
+          bill: [
+            charge(1, 'Late', '2026-09-30 22:30:00'),
+            charge(2, 'Netflix', '2026-10-04 06:00:00'),
+            charge(3, 'Old', '2026-07-15 06:00:00'),
+            charge(4, 'Ahead', '2026-10-20 06:00:00'),
+          ],
+          bill_photo: [],
+          subscription: [
+            {
+              id: '1',
+              chargeDay: '30',
+              price: '1.00',
+              name: 'Late',
+              created: ts,
+              lastUpdate: ts,
+              userId: '1',
+              accountId: null,
+              shopId: null,
+              categoryId: null,
+            },
+            {
+              id: '2',
+              chargeDay: '4',
+              price: '1.00',
+              name: 'Netflix',
+              created: ts,
+              lastUpdate: ts,
+              userId: '1',
+              accountId: null,
+              shopId: null,
+              categoryId: null,
+            },
+            {
+              id: '3',
+              chargeDay: '15',
+              price: '1.00',
+              name: 'Old',
+              created: ts,
+              lastUpdate: ts,
+              userId: '1',
+              accountId: null,
+              shopId: null,
+              categoryId: null,
+            },
+            {
+              id: '4',
+              chargeDay: '25',
+              price: '1.00',
+              name: 'Ahead',
+              created: ts,
+              lastUpdate: ts,
+              userId: '1',
+              accountId: null,
+              shopId: null,
+              categoryId: null,
+            },
+          ],
+        }),
+      ),
+      [v2Ana],
+      { dismissedEmails: [], today: '2026-10-20', newId: ids() },
+    );
+
+    expect(
+      plan.report.subscriptions.map((s) => [
+        s.name,
+        s.latestLocalDate,
+        s.lastChargedMonth,
+        s.dueAtStartup,
+        s.chargedAhead,
+      ]),
+    ).toEqual([
+      ['Late', '2026-10-01', '2026-09-01', [], false],
+      ['Netflix', '2026-10-04', '2026-10-01', [], false],
+      [
+        'Old',
+        '2026-07-15',
+        '2026-07-01',
+        ['2026-08-15', '2026-09-15', '2026-10-15'],
+        false,
+      ],
+      // Charged on the 20th for the 25th: v1 charged early, so October counts as charged.
+      ['Ahead', '2026-10-20', '2026-10-01', [], true],
+    ]);
+  });
+
   it('stops on a blank account name, a bad charge day and a photo path with a directory', () => {
     const tables = v1Tables({
       account: [{ id: '1', name: '  ', created: ts, lastUpdate: ts }],

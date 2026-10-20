@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { normalizeComment } from '../../bills/bills.service.js';
 import { photoDisplayName } from '../../photos/photo-name.js';
 import {
+  chargeDate,
+  dueMonths,
   initialLastChargedMonth,
   localToday,
   monthOf,
@@ -10,6 +12,7 @@ import { normalizeName } from '../../subscriptions/subscriptions.service.js';
 import { normalizeEmail } from '../../users/normalize-email.js';
 import {
   cutCodePoints,
+  InvalidDateError,
   readBillDate,
   toCents,
   wallTimeToInstant,
@@ -117,7 +120,13 @@ export interface PlanReport {
     accountId: string;
     matches: number;
     latest: string | null;
+    /** The latest charge's Ljubljana date. */
+    latestLocalDate: string | null;
     lastChargedMonth: string;
+    /** Charge dates v2 bills at its next startup / daily run. */
+    dueAtStartup: string[];
+    /** The charged month's charge date is after the import day. */
+    chargedAhead: boolean;
   }[];
   /** v1 rows that make up each merged shop / category (filled by plan-lists). */
   merged: {
@@ -324,7 +333,18 @@ export function planImport(
     }
     const accountId = targetAccount(label, b.userId, b.accountId);
     if (!accountId) continue;
-    const read = readBillDate(b.date, b.created);
+    let read: ReturnType<typeof readBillDate>;
+    let createdAt: Date;
+    let updatedAt: Date;
+    try {
+      read = readBillDate(b.date, b.created);
+      createdAt = utc(b.created);
+      updatedAt = utc(b.lastUpdate);
+    } catch (error) {
+      if (!(error instanceof InvalidDateError)) throw error;
+      problems.push(`${label}: ${error.message}`);
+      continue;
+    }
     report.dateRules[read.rule]++;
     if (read.rule === 'web-era' && read.daysDiffer) {
       report.borderline.push({
@@ -370,8 +390,8 @@ export function planImport(
       subscriptionId: charge?.row.id ?? null,
       createdById: user.id,
       updatedById: user.id,
-      createdAt: utc(b.created),
-      updatedAt: utc(b.lastUpdate),
+      createdAt,
+      updatedAt,
     };
     bills.push(row);
     v1OfBill.set(id, b);
@@ -386,15 +406,24 @@ export function planImport(
         (max, d) => (max === null || d > max ? d : max),
         null,
       );
-    s.row.lastChargedMonth = latest
-      ? monthOf(localToday(latest))
+    const latestLocalDate = latest ? localToday(latest) : null;
+    s.row.lastChargedMonth = latestLocalDate
+      ? chargedMonth(latestLocalDate, s.v1.chargeDay)
       : initialLastChargedMonth(s.v1.chargeDay, options.today);
+    const [year, month] = s.row.lastChargedMonth.split('-').map(Number);
     report.subscriptions.push({
       name: s.row.name,
       accountId: s.row.accountId,
       matches: s.matches.length,
       latest: latest?.toISOString() ?? null,
+      latestLocalDate,
       lastChargedMonth: s.row.lastChargedMonth,
+      dueAtStartup: dueMonths(
+        s.row.lastChargedMonth,
+        s.v1.chargeDay,
+        options.today,
+      ),
+      chargedAhead: chargeDate(year, month, s.v1.chargeDay) > options.today,
     });
   }
 
@@ -485,6 +514,21 @@ export function planImport(
     },
     report,
   };
+}
+
+/**
+ * The month a charge on `date` (Ljubljana) paid for: its own or the previous
+ * one, whichever has its charge date nearer (a tie goes to its own). v1's cron
+ * ran by UTC day, so a charge on the 30th after 22:00 UTC lands on the 1st.
+ */
+function chargedMonth(date: string, chargeDay: number): string {
+  const [year, month] = date.split('-').map(Number);
+  const prev = month === 1 ? [year - 1, 12] : [year, month - 1];
+  const days = (a: string, b: string) =>
+    Math.abs(Date.parse(a) - Date.parse(b)) / 86_400_000;
+  const own = chargeDate(year, month, chargeDay);
+  const before = chargeDate(prev[0], prev[1], chargeDay);
+  return days(date, before) < days(date, own) ? monthOf(before) : monthOf(own);
 }
 
 function cutName(name: string, label: string, report: PlanReport): string {
