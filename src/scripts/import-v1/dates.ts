@@ -15,14 +15,35 @@ export type DateRule =
 const WALL =
   /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?$/;
 
+/** A v1 date that doesn't exist (`0000-00-00`, 30 February) or is before 1970. */
+export class InvalidDateError extends Error {
+  constructor(wall: string) {
+    super(`invalid date "${wall}"`);
+  }
+}
+
 function wallAsUtcMs(wall: string): number {
   const m = WALL.exec(wall);
   if (!m) {
-    throw new Error(`Invalid v1 datetime "${wall}"`);
+    throw new InvalidDateError(wall);
   }
   const [, y, mo, d, h, mi, s, frac = '0'] = m;
   const ms = Math.floor(Number(frac.padEnd(6, '0')) / 1000);
-  return Date.UTC(+y, +mo - 1, +d, +h, +mi, +s, ms);
+  const utc = Date.UTC(+y, +mo - 1, +d, +h, +mi, +s, ms);
+  // Date.UTC rolls over (30 Feb → 2 Mar); a round trip shows it.
+  const back = new Date(utc);
+  if (
+    +y < 1970 ||
+    back.getUTCFullYear() !== +y ||
+    back.getUTCMonth() !== +mo - 1 ||
+    back.getUTCDate() !== +d ||
+    back.getUTCHours() !== +h ||
+    back.getUTCMinutes() !== +mi ||
+    back.getUTCSeconds() !== +s
+  ) {
+    throw new InvalidDateError(wall);
+  }
+  return utc;
 }
 
 const PARTS = new Intl.DateTimeFormat('en-US', {

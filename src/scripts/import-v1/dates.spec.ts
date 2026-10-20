@@ -113,6 +113,23 @@ describe('dates', () => {
     expect(() => toCents('abc')).toThrow();
   });
 
+  it('rejects impossible dates and dates before 1970', () => {
+    for (const wall of [
+      '0000-00-00 00:00:00',
+      '2025-02-30 10:00:00',
+      '2025-13-01 10:00:00',
+      '2025-01-01 24:00:00',
+      '1969-12-31 23:59:59',
+    ]) {
+      expect(() => wallTimeToInstant(wall, 'utc')).toThrow(
+        `invalid date "${wall}"`,
+      );
+    }
+    expect(() =>
+      readBillDate('2025-01-01 10:00:00', '2025-02-30 10:00:00.000000'),
+    ).toThrow('invalid date "2025-02-30 10:00:00.000000"');
+  });
+
   it('cuts by code points', () => {
     expect(cutCodePoints('a🧑‍🔧b', 2)).toBe('a\u{1F9D1}');
     expect(cutCodePoints('short', 100)).toBe('short');

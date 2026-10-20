@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { normalizeComment } from '../../bills/bills.service.js';
 import { photoDisplayName } from '../../photos/photo-name.js';
 import {
+  chargeDate,
+  dueMonths,
   initialLastChargedMonth,
   localToday,
   monthOf,
@@ -10,6 +12,7 @@ import { normalizeName } from '../../subscriptions/subscriptions.service.js';
 import { normalizeEmail } from '../../users/normalize-email.js';
 import {
   cutCodePoints,
+  InvalidDateError,
   readBillDate,
   toCents,
   wallTimeToInstant,
@@ -117,7 +120,13 @@ export interface PlanReport {
     accountId: string;
     matches: number;
     latest: string | null;
+    /** The latest charge's Ljubljana date. */
+    latestLocalDate: string | null;
     lastChargedMonth: string;
+    /** Charge dates v2 bills at its next startup / daily run. */
+    dueAtStartup: string[];
+    /** The charged month's charge date is after the import day. */
+    chargedAhead: boolean;
   }[];
   /** v1 rows that make up each merged shop / category (filled by plan-lists). */
   merged: {
@@ -137,9 +146,21 @@ export interface Plan {
   subscriptions: NewSubscription[];
   bills: NewBill[];
   photos: NewPhoto[];
-  /** Per v2 account that receives bills: what the database must hold after the import. */
-  expected: { accountId: string; bills: number; cents: number }[];
+  /**
+   * Bill count and price sum per v2 account and per v2 user, counted from the
+   * v1 bills directly (not from `bills`), so the import can check what it wrote.
+   */
+  v1Totals: V1Totals;
   report: PlanReport;
+}
+
+export interface Totals {
+  bills: number;
+  cents: number;
+}
+export interface V1Totals {
+  perAccount: ({ accountId: string } & Totals)[];
+  perUser: ({ userId: string } & Totals)[];
 }
 
 export class PlanError extends Error {
@@ -312,7 +333,18 @@ export function planImport(
     }
     const accountId = targetAccount(label, b.userId, b.accountId);
     if (!accountId) continue;
-    const read = readBillDate(b.date, b.created);
+    let read: ReturnType<typeof readBillDate>;
+    let createdAt: Date;
+    let updatedAt: Date;
+    try {
+      read = readBillDate(b.date, b.created);
+      createdAt = utc(b.created);
+      updatedAt = utc(b.lastUpdate);
+    } catch (error) {
+      if (!(error instanceof InvalidDateError)) throw error;
+      problems.push(`${label}: ${error.message}`);
+      continue;
+    }
     report.dateRules[read.rule]++;
     if (read.rule === 'web-era' && read.daysDiffer) {
       report.borderline.push({
@@ -358,8 +390,8 @@ export function planImport(
       subscriptionId: charge?.row.id ?? null,
       createdById: user.id,
       updatedById: user.id,
-      createdAt: utc(b.created),
-      updatedAt: utc(b.lastUpdate),
+      createdAt,
+      updatedAt,
     };
     bills.push(row);
     v1OfBill.set(id, b);
@@ -374,15 +406,24 @@ export function planImport(
         (max, d) => (max === null || d > max ? d : max),
         null,
       );
-    s.row.lastChargedMonth = latest
-      ? monthOf(localToday(latest))
+    const latestLocalDate = latest ? localToday(latest) : null;
+    s.row.lastChargedMonth = latestLocalDate
+      ? chargedMonth(latestLocalDate, s.v1.chargeDay)
       : initialLastChargedMonth(s.v1.chargeDay, options.today);
+    const [year, month] = s.row.lastChargedMonth.split('-').map(Number);
     report.subscriptions.push({
       name: s.row.name,
       accountId: s.row.accountId,
       matches: s.matches.length,
       latest: latest?.toISOString() ?? null,
+      latestLocalDate,
       lastChargedMonth: s.row.lastChargedMonth,
+      dueAtStartup: dueMonths(
+        s.row.lastChargedMonth,
+        s.v1.chargeDay,
+        options.today,
+      ),
+      chargedAhead: chargeDate(year, month, s.v1.chargeDay) > options.today,
     });
   }
 
@@ -436,12 +477,25 @@ export function planImport(
     throw new PlanError(problems);
   }
 
-  const totals = new Map<string, { bills: number; cents: number }>();
-  for (const b of bills) {
-    const t = totals.get(b.accountId) ?? { bills: 0, cents: 0 };
+  // From the snapshot, not from `bills`: the import compares what it wrote with v1.
+  const perAccount = new Map<string, Totals>();
+  const perUser = new Map<string, Totals>();
+  const add = (totals: Map<string, Totals>, key: string, cents: number) => {
+    const t = totals.get(key) ?? { bills: 0, cents: 0 };
     t.bills++;
-    t.cents += b.priceCents;
-    totals.set(b.accountId, t);
+    t.cents += cents;
+    totals.set(key, t);
+  };
+  for (const b of snapshot.bills) {
+    const user = kept.get(b.userId);
+    const cents = toCents(b.price);
+    if (!user || cents === 0) continue;
+    const accountId =
+      b.accountId === null
+        ? user.personalAccountId
+        : accountIds.get(b.accountId)!;
+    add(perAccount, accountId, cents);
+    add(perUser, user.id, cents);
   }
   return {
     accounts,
@@ -451,9 +505,30 @@ export function planImport(
     subscriptions: subscriptionPlans.map((s) => s.row),
     bills,
     photos,
-    expected: [...totals].map(([accountId, t]) => ({ accountId, ...t })),
+    v1Totals: {
+      perAccount: [...perAccount].map(([accountId, t]) => ({
+        accountId,
+        ...t,
+      })),
+      perUser: [...perUser].map(([userId, t]) => ({ userId, ...t })),
+    },
     report,
   };
+}
+
+/**
+ * The month a charge on `date` (Ljubljana) paid for: its own or the previous
+ * one, whichever has its charge date nearer (a tie goes to its own). v1's cron
+ * ran by UTC day, so a charge on the 30th after 22:00 UTC lands on the 1st.
+ */
+function chargedMonth(date: string, chargeDay: number): string {
+  const [year, month] = date.split('-').map(Number);
+  const prev = month === 1 ? [year - 1, 12] : [year, month - 1];
+  const days = (a: string, b: string) =>
+    Math.abs(Date.parse(a) - Date.parse(b)) / 86_400_000;
+  const own = chargeDate(year, month, chargeDay);
+  const before = chargeDate(prev[0], prev[1], chargeDay);
+  return days(date, before) < days(date, own) ? monthOf(before) : monthOf(own);
 }
 
 function cutName(name: string, label: string, report: PlanReport): string {

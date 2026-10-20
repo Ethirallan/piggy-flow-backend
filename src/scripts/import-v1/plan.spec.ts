@@ -57,7 +57,11 @@ describe('planImport', () => {
       toSnapshot(
         v1Tables({
           ...twoUsers,
-          bill: [bill(1), bill(2, { accountId: '1', price: '27.62' })],
+          bill: [
+            bill(1),
+            bill(2, { accountId: '1', price: '27.62' }),
+            bill(3, { userId: '2', price: '-5.00' }),
+          ],
           bill_photo: [],
         }),
       ),
@@ -86,11 +90,19 @@ describe('planImport', () => {
     ).toEqual([
       ['ana-personal', 1000, 'ana'],
       ['id-1', 2762, 'ana'],
+      ['bob-personal', -500, 'bob'],
     ]);
-    expect(plan.expected).toEqual([
-      { accountId: 'ana-personal', bills: 1, cents: 1000 },
-      { accountId: 'id-1', bills: 1, cents: 2762 },
-    ]);
+    expect(plan.v1Totals).toEqual({
+      perAccount: [
+        { accountId: 'ana-personal', bills: 1, cents: 1000 },
+        { accountId: 'id-1', bills: 1, cents: 2762 },
+        { accountId: 'bob-personal', bills: 1, cents: -500 },
+      ],
+      perUser: [
+        { userId: 'ana', bills: 2, cents: 3762 },
+        { userId: 'bob', bills: 1, cents: -500 },
+      ],
+    });
   });
 
   it('stops before writing when a user is not registered or a dismissed email is unknown', () => {
@@ -138,6 +150,10 @@ describe('planImport', () => {
 
     expect(plan.accounts.map((a) => a.name)).toEqual(['Car']);
     expect(plan.bills).toHaveLength(1);
+    expect(plan.v1Totals).toEqual({
+      perAccount: [{ accountId: 'ana-personal', bills: 1, cents: 1000 }],
+      perUser: [{ userId: 'ana', bills: 1, cents: 1000 }],
+    });
     expect(plan.report.leftOut).toEqual({
       users: ['bob@example.com'],
       accounts: ['Boat'],
@@ -186,6 +202,10 @@ describe('planImport', () => {
       null,
     ]);
     expect(plan.report.fixUps).toContain('bill 1: price 0, skipped');
+    expect(plan.v1Totals).toEqual({
+      perAccount: [{ accountId: 'ana-personal', bills: 2, cents: 2000 }],
+      perUser: [{ userId: 'ana', bills: 2, cents: 2000 }],
+    });
     expect(plan.report.fixUps).toContain(
       'bill 2: comment cut to 1000 characters',
     );
@@ -347,6 +367,120 @@ describe('planImport', () => {
         asUtc: '2026-10-02',
         asLocal: '2026-10-01',
       },
+    ]);
+  });
+
+  it('stops on a bill with an impossible date, naming the bill', () => {
+    const run = () =>
+      planImport(
+        toSnapshot(
+          v1Tables({
+            bill: [
+              bill(1, { date: '0000-00-00 00:00:00' }),
+              bill(2, { created: '2025-02-30 10:00:00.000000' }),
+            ],
+            bill_photo: [],
+          }),
+        ),
+        [v2Ana],
+        { dismissedEmails: [], today: '2026-10-20' },
+      );
+
+    expect(run).toThrow(PlanError);
+    expect(run).toThrow('bill 1: invalid date "0000-00-00 00:00:00"');
+    expect(run).toThrow('bill 2: invalid date "2025-02-30 10:00:00.000000"');
+  });
+
+  it('takes the charged month whose charge date is nearest to the latest charge', () => {
+    // v1's cron ran by UTC day: a charge at 22:30 UTC on 30 Sep is 1 Oct in Ljubljana.
+    const charge = (id: number, name: string, utc: string) =>
+      bill(id, { comment: name, date: utc, created: `${utc}.100000` });
+    const plan = planImport(
+      toSnapshot(
+        v1Tables({
+          bill: [
+            charge(1, 'Late', '2026-09-30 22:30:00'),
+            charge(2, 'Netflix', '2026-10-04 06:00:00'),
+            charge(3, 'Old', '2026-07-15 06:00:00'),
+            charge(4, 'Ahead', '2026-10-20 06:00:00'),
+          ],
+          bill_photo: [],
+          subscription: [
+            {
+              id: '1',
+              chargeDay: '30',
+              price: '1.00',
+              name: 'Late',
+              created: ts,
+              lastUpdate: ts,
+              userId: '1',
+              accountId: null,
+              shopId: null,
+              categoryId: null,
+            },
+            {
+              id: '2',
+              chargeDay: '4',
+              price: '1.00',
+              name: 'Netflix',
+              created: ts,
+              lastUpdate: ts,
+              userId: '1',
+              accountId: null,
+              shopId: null,
+              categoryId: null,
+            },
+            {
+              id: '3',
+              chargeDay: '15',
+              price: '1.00',
+              name: 'Old',
+              created: ts,
+              lastUpdate: ts,
+              userId: '1',
+              accountId: null,
+              shopId: null,
+              categoryId: null,
+            },
+            {
+              id: '4',
+              chargeDay: '25',
+              price: '1.00',
+              name: 'Ahead',
+              created: ts,
+              lastUpdate: ts,
+              userId: '1',
+              accountId: null,
+              shopId: null,
+              categoryId: null,
+            },
+          ],
+        }),
+      ),
+      [v2Ana],
+      { dismissedEmails: [], today: '2026-10-20', newId: ids() },
+    );
+
+    expect(
+      plan.report.subscriptions.map((s) => [
+        s.name,
+        s.latestLocalDate,
+        s.lastChargedMonth,
+        s.dueAtStartup,
+        s.chargedAhead,
+      ]),
+    ).toEqual([
+      ['Late', '2026-10-01', '2026-09-01', [], false],
+      ['Netflix', '2026-10-04', '2026-10-01', [], false],
+      [
+        'Old',
+        '2026-07-15',
+        '2026-07-01',
+        ['2026-08-15', '2026-09-15', '2026-10-15'],
+        false,
+      ],
+      // Charged on the 20th for the 25th: v1 charged early, so October counts as charged.
+      ['Ahead', '2026-10-20', '2026-10-01', [], true],
     ]);
   });
 
