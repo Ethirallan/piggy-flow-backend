@@ -96,24 +96,44 @@ export function toSnapshot(tables: Map<string, DumpRow[]>): V1Snapshot {
     }
   }
   const rows = (table: (typeof TABLES)[number]) => tables.get(table) ?? [];
+  const missingColumns = new Set<string>();
   const reader = (table: string, row: DumpRow) => {
     const label = `${table} ${row.id ?? `(${row.userId ?? '?'}, ${row.accountId ?? '?'})`}`;
     const raw = (column: string): string | null => {
       if (!(column in row)) {
-        problems.push(`${label}: column ${column} is missing`);
+        if (!missingColumns.has(`${table}.${column}`)) {
+          missingColumns.add(`${table}.${column}`);
+          problems.push(`${label}: column ${column} is missing`);
+        }
         return null;
       }
       return row[column];
     };
-    const text = (column: string) => raw(column) ?? '';
+    const text = (column: string) => {
+      const value = raw(column);
+      if (value === null && column in row) {
+        problems.push(`${label}: ${column} is NULL`);
+      }
+      return value ?? '';
+    };
     const optionalText = (column: string) => raw(column);
-    // Number(null) is 0: a required id column that is NULL in the dump becomes
-    // 0, which never exists, so it is reported as a dangling reference
+    const integer = (column: string, value: string) => {
+      const number = Number(value);
+      if (value.trim() === '' || !Number.isSafeInteger(number)) {
+        problems.push(`${label}: ${column} "${value}" is not an integer`);
+      }
+      return number;
+    };
+    // A required id column that is NULL in the dump becomes 0, which never
+    // exists, so it is reported as a dangling reference
     // (e.g. `bill 5: user 0 does not exist`).
-    const id = (column: string) => Number(raw(column));
+    const id = (column: string) => {
+      const value = raw(column);
+      return value === null ? 0 : integer(column, value);
+    };
     const optionalId = (column: string) => {
       const value = raw(column);
-      return value === null ? null : Number(value);
+      return value === null ? null : integer(column, value);
     };
     return { text, optionalText, id, optionalId };
   };
@@ -202,6 +222,23 @@ export function toSnapshot(tables: Map<string, DumpRow[]>): V1Snapshot {
       };
     }),
   };
+
+  const duplicates = (table: string, list: { id: number }[]) => {
+    const seen = new Set<number>();
+    for (const { id } of list) {
+      if (seen.has(id)) {
+        problems.push(`${table} ${id}: duplicate id`);
+      }
+      seen.add(id);
+    }
+  };
+  duplicates('user', snapshot.users);
+  duplicates('account', snapshot.accounts);
+  duplicates('shop', snapshot.shops);
+  duplicates('category', snapshot.categories);
+  duplicates('bill', snapshot.bills);
+  duplicates('bill_photo', snapshot.photos);
+  duplicates('subscription', snapshot.subscriptions);
 
   const ids = (list: { id: number }[]) => new Set(list.map((row) => row.id));
   const users = ids(snapshot.users);

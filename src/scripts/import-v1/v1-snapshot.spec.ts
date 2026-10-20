@@ -131,7 +131,6 @@ describe('toSnapshot', () => {
                 categoryId: null,
               },
             ],
-            bill_photo: [],
             subscription: undefined,
           }),
         );
@@ -157,5 +156,67 @@ describe('toSnapshot', () => {
     expect(() => toSnapshot(tables)).toThrow(
       'shop 1: column userId is missing',
     );
+  });
+
+  it('reports a missing column once per table', () => {
+    const tables = v1Tables({
+      shop: [
+        { id: '1', name: 'Spar', created: ts, lastUpdate: ts },
+        { id: '2', name: 'Mercator', created: ts, lastUpdate: ts },
+      ],
+    });
+    const error: unknown = (() => {
+      try {
+        toSnapshot(tables);
+      } catch (e) {
+        return e;
+      }
+    })();
+
+    expect(
+      (error as SnapshotError).problems.filter((p) => p.includes('is missing')),
+    ).toEqual(['shop 1: column userId is missing']);
+  });
+
+  it('rejects ids that are not integers', () => {
+    const tables = v1Tables({
+      subscription: [
+        {
+          id: '1',
+          chargeDay: '4.5',
+          price: '9.99',
+          name: 'Netflix',
+          created: ts,
+          lastUpdate: ts,
+          userId: 'abc',
+          accountId: null,
+          shopId: null,
+          categoryId: null,
+        },
+      ],
+    });
+
+    expect(() => toSnapshot(tables)).toThrow(
+      /subscription 1: userId "abc" is not an integer[\s\S]*subscription 1: chargeDay "4\.5" is not an integer/,
+    );
+  });
+
+  it('rejects NULL in a required text column', () => {
+    const tables = v1Tables({
+      account: [{ id: '1', name: null, created: ts, lastUpdate: ts }],
+    });
+
+    expect(() => toSnapshot(tables)).toThrow('account 1: name is NULL');
+  });
+
+  it('rejects a duplicate id within a table', () => {
+    const tables = v1Tables({
+      shop: [
+        { id: '1', name: 'Spar', created: ts, lastUpdate: ts, userId: '1' },
+        { id: '1', name: 'Hofer', created: ts, lastUpdate: ts, userId: '1' },
+      ],
+    });
+
+    expect(() => toSnapshot(tables)).toThrow('shop 1: duplicate id');
   });
 });
