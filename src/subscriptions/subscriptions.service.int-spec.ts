@@ -212,6 +212,51 @@ describe('SubscriptionsService (integration)', () => {
       });
     });
 
+    it('applies a charge-day change that races a charge instead of answering 404', async () => {
+      const ana = await createUser();
+      const home = await accounts.create(ana.id, 'Home');
+      const sub = await subscriptions.create(
+        ana.id,
+        { accountId: home.id, priceCents: 100, chargeDay: 15 },
+        '2026-10-10',
+      );
+      // A charging run holds the subscription and is about to charge October.
+      const runner = dataSource.createQueryRunner();
+      await runner.connect();
+      await runner.startTransaction();
+      let committed = false;
+      try {
+        await runner.query(
+          'SELECT id FROM subscriptions WHERE id = $1 FOR NO KEY UPDATE',
+          [sub.id],
+        );
+        const updating = subscriptions.update(
+          ana.id,
+          sub.id,
+          { chargeDay: 25 },
+          '2026-10-20',
+        );
+        await waitForLockWait(dataSource);
+        await runner.query(
+          "UPDATE subscriptions SET last_charged_month = '2026-10-01' WHERE id = $1",
+          [sub.id],
+        );
+        await runner.commitTransaction();
+        committed = true;
+
+        // October stays charged; the new day applies from November.
+        await expect(updating).resolves.toMatchObject({
+          chargeDay: 25,
+          lastChargedMonth: '2026-10-01',
+        });
+      } finally {
+        if (!committed) {
+          await runner.rollbackTransaction();
+        }
+        await runner.release();
+      }
+    });
+
     it('answers 400 for nothing to update and when a move keeps a shop of the old account', async () => {
       const ana = await createUser();
       const home = await accounts.create(ana.id, 'Home');

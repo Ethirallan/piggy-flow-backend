@@ -42,6 +42,26 @@ export function monthOf(date: string): string {
   return firstDay(parse(date));
 }
 
+/**
+ * What the charger's SQL needs to find due subscriptions on `today`: those
+ * behind by more than a month, or charged last month whose charge date this
+ * month (`LEAST(charge_day, daysInMonth)`) is on or before `day`.
+ */
+export function dueFilter(today: string): {
+  thisMonth: string;
+  previousMonth: string;
+  daysInMonth: number;
+  day: number;
+} {
+  const current = parse(today);
+  return {
+    thisMonth: firstDay(current),
+    previousMonth: firstDay(addMonths(current, -1)),
+    daysInMonth: daysInMonth(current.year, current.month),
+    day: Number(today.slice(8)),
+  };
+}
+
 /** A month's charge date: the charge day, or the month's last day when it's shorter. */
 export function chargeDate(
   year: number,
