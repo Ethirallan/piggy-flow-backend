@@ -201,6 +201,34 @@ describe('SubscriptionChargerService (integration)', () => {
     expect((await bills()).map((b) => b.accountId)).toEqual([trip.id, trip.id]);
   });
 
+  it.each([
+    ['on its exact day', 20, '2026-10-10', '2026-10-20', 1],
+    ['not the day before', 20, '2026-10-10', '2026-10-19', 0],
+    ['the 31st on the 31st', 31, '2026-10-10', '2026-10-31', 1],
+    [
+      'the 31st not on the 30th of a 31-day month',
+      31,
+      '2026-10-10',
+      '2026-10-30',
+      0,
+    ],
+    [
+      'the 31st on the 30th of a 30-day month',
+      31,
+      '2026-11-10',
+      '2026-11-30',
+      1,
+    ],
+    ['the 31st on 28 February', 31, '2027-02-10', '2027-02-28', 1],
+  ])(
+    'selects a subscription charged last month %s',
+    async (_case, chargeDay, createdOn, today, expected) => {
+      await setup(chargeDay, createdOn);
+
+      expect(await charger.run(today)).toBe(expected);
+    },
+  );
+
   it('charges a subscription moved while it was being charged in its new account', async () => {
     const { ana, subscription } = await setup(15, '2026-10-10');
     const trip = await accounts.create(ana.id, 'Trip');

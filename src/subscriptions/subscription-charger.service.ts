@@ -71,7 +71,12 @@ export class SubscriptionChargerService {
       }
       accountId = result.movedTo;
     }
-    return 0; // keeps moving: the next run picks it up
+    // Keeps moving: the next run picks it up.
+    this.logger.warn({
+      event: 'subscriptions.charge_deferred',
+      subscriptionId: id,
+    });
+    return 0;
   }
 
   /** Bills created, or the account the subscription moved to after it was selected. */

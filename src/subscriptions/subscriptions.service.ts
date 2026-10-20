@@ -153,14 +153,12 @@ export class SubscriptionsService {
     }
     // A concurrent change (e.g. a charge between the read and the UPDATE)
     // makes the pinned UPDATE miss: try once more against a fresh read.
-    for (let attempt = 1; ; attempt++) {
+    for (let attempt = 0; attempt < 2; attempt++) {
       if (await this.tryUpdate(userId, id, changes, today)) {
         return this.findForMember(id, userId);
       }
-      if (attempt === 2) {
-        throw new NotFoundException(SUBSCRIPTION_NOT_FOUND);
-      }
     }
+    throw new NotFoundException(SUBSCRIPTION_NOT_FOUND);
   }
 
   /** One read-check-UPDATE pass; false when the row changed after it was read. */
