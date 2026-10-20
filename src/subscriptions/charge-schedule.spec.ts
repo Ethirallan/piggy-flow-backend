@@ -1,5 +1,6 @@
 import {
   chargeDate,
+  dueFilter,
   dueMonths,
   initialLastChargedMonth,
   lastChargedMonthAfterDayChange,
@@ -27,6 +28,16 @@ describe('charge schedule', () => {
 
   it('gives the month of a date', () => {
     expect(monthOf('2026-10-20')).toBe('2026-10-01');
+  });
+
+  it('gives the due-subscription filter for a day, across a year boundary', () => {
+    expect(dueFilter('2027-01-31')).toEqual({
+      thisMonth: '2027-01-01',
+      previousMonth: '2026-12-01',
+      daysInMonth: 31,
+      day: 31,
+    });
+    expect(dueFilter('2028-02-05')).toMatchObject({ daysInMonth: 29, day: 5 });
   });
 
   it.each([

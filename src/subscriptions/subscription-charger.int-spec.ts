@@ -184,4 +184,54 @@ describe('SubscriptionChargerService (integration)', () => {
       await other.release();
     }
   });
+
+  it('only opens transactions for subscriptions with a due month', async () => {
+    const { ana } = await setup(25, '2026-10-10');
+    const trip = await accounts.create(ana.id, 'Trip');
+    await subscriptions.create(
+      ana.id,
+      { accountId: trip.id, priceCents: 500, chargeDay: 25 },
+      '2026-08-10',
+    );
+    const transaction = vi.spyOn(dataSource, 'transaction');
+
+    // Home's day 25 is still ahead; Trip missed August and September.
+    expect(await charger.run('2026-10-20')).toBe(2);
+    expect(transaction).toHaveBeenCalledTimes(1);
+    expect((await bills()).map((b) => b.accountId)).toEqual([trip.id, trip.id]);
+  });
+
+  it('charges a subscription moved while it was being charged in its new account', async () => {
+    const { ana, subscription } = await setup(15, '2026-10-10');
+    const trip = await accounts.create(ana.id, 'Trip');
+    // A PATCH holds the subscription and is moving it to Trip.
+    const other = dataSource.createQueryRunner();
+    await other.connect();
+    await other.startTransaction();
+    let committed = false;
+    try {
+      await other.query(
+        'SELECT id FROM subscriptions WHERE id = $1 FOR NO KEY UPDATE',
+        [subscription.id],
+      );
+      const running = charger.run('2026-10-20');
+      await waitForLockWait(dataSource);
+      await other.query(
+        'UPDATE subscriptions SET account_id = $1, shop_id = NULL WHERE id = $2',
+        [trip.id, subscription.id],
+      );
+      await other.commitTransaction();
+      committed = true;
+
+      expect(await running).toBe(1);
+      expect(await bills()).toMatchObject([
+        { accountId: trip.id, shopId: null },
+      ]);
+    } finally {
+      if (!committed) {
+        await other.rollbackTransaction();
+      }
+      await other.release();
+    }
+  });
 });

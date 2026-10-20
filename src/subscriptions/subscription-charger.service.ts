@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, type EntityManager, Repository } from 'typeorm';
 import {
   CHARGE_TIME_ZONE,
+  dueFilter,
   dueMonths,
   localToday,
   monthOf,
@@ -22,21 +23,24 @@ export class SubscriptionChargerService {
 
   /** Charges every due month up to `today` (a Ljubljana date). Returns the number of bills created. */
   async run(today = localToday()): Promise<number> {
-    // Not charged this month yet: a superset of the due ones (this month's
-    // day may still be ahead); each is re-checked under its lock.
+    // The ones with a due month (see dueFilter); each is re-checked under its lock.
     const candidates = await this.subscriptions
       .createQueryBuilder('subscription')
       .select(['subscription.id', 'subscription.accountId'])
-      .where('subscription.lastChargedMonth < :thisMonth', {
-        thisMonth: monthOf(today),
-      })
+      .where('subscription.lastChargedMonth < :thisMonth')
+      .andWhere(
+        '(subscription.lastChargedMonth < :previousMonth OR LEAST(subscription.chargeDay, :daysInMonth) <= :day)',
+      )
+      .setParameters(dueFilter(today))
       .getMany();
 
     let created = 0;
     for (const candidate of candidates) {
       try {
-        created += await this.dataSource.transaction((manager) =>
-          this.charge(manager, candidate.id, candidate.accountId, today),
+        created += await this.chargeOne(
+          candidate.id,
+          candidate.accountId,
+          today,
         );
       } catch (error) {
         this.logger.error({
@@ -52,12 +56,31 @@ export class SubscriptionChargerService {
     return created;
   }
 
+  /** Charges one subscription, following it (twice at most) if it moves to another account meanwhile. */
+  private async chargeOne(
+    id: string,
+    accountId: string,
+    today: string,
+  ): Promise<number> {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const result = await this.dataSource.transaction((manager) =>
+        this.charge(manager, id, accountId, today),
+      );
+      if (typeof result === 'number') {
+        return result;
+      }
+      accountId = result.movedTo;
+    }
+    return 0; // keeps moving: the next run picks it up
+  }
+
+  /** Bills created, or the account the subscription moved to after it was selected. */
   private async charge(
     manager: EntityManager,
     id: string,
     accountId: string,
     today: string,
-  ): Promise<number> {
+  ): Promise<number | { movedTo: string }> {
     // Account first (KEY SHARE, which the bill inserts need anyway), then the
     // subscription: the same order as account delete, so they can't deadlock.
     await manager.query('SELECT 1 FROM accounts WHERE id = $1 FOR KEY SHARE', [
@@ -67,8 +90,12 @@ export class SubscriptionChargerService {
       where: { id },
       lock: { mode: 'for_no_key_update' },
     });
-    if (!subscription || subscription.accountId !== accountId) {
-      return 0; // deleted, or moved meanwhile: the next run picks it up
+    if (!subscription) {
+      return 0; // deleted meanwhile
+    }
+    if (subscription.accountId !== accountId) {
+      // Moved meanwhile: the account we locked is the wrong one.
+      return { movedTo: subscription.accountId };
     }
     const dates = dueMonths(
       subscription.lastChargedMonth,
