@@ -110,6 +110,9 @@ export class ShopsController {
     description:
       'No such account, the current user is not a member, or the shop is not in this account',
   })
+  @ApiConflictResponse({
+    description: 'Bills or subscriptions of the account still use this shop',
+  })
   delete(
     @CurrentUser() auth: AuthContext,
     @Param('accountId', ParseUUIDPipe) accountId: string,
