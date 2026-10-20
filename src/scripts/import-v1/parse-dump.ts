@@ -25,6 +25,12 @@ const ESCAPES: Record<string, string> = {
   _: '\\_',
 };
 
+const INSERT = /^INSERT\s+INTO\b/i;
+const CREATE_TABLE = /^CREATE\s+TABLE\b/i;
+// Statements that carry no rows and are skipped; anything else is an error.
+const SKIPPED =
+  /^(SET|START\s+TRANSACTION|COMMIT|ROLLBACK|ALTER\s+TABLE|DROP\s+TABLE|LOCK\s+TABLES|UNLOCK\s+TABLES|CREATE\s+DATABASE|USE)\b/i;
+
 const NUMBER = /^-?\d+(\.\d+)?([eE][-+]?\d+)?/;
 
 /**
@@ -50,15 +56,22 @@ class Parser {
       if (this.pos >= this.sql.length) {
         return this.tables;
       }
-      if (this.startsWith('INSERT INTO')) {
+      const rest = this.sql.slice(this.pos, this.pos + 64);
+      const insert = INSERT.exec(rest);
+      const create = CREATE_TABLE.exec(rest);
+      if (insert) {
+        this.advance(insert[0].length);
         this.insert();
-      } else if (this.startsWith('CREATE TABLE')) {
-        this.advance('CREATE TABLE'.length);
+      } else if (create) {
+        this.advance(create[0].length);
         this.skipSpace();
         this.rowsOf(this.identifier());
         this.skipStatement();
-      } else {
+      } else if (SKIPPED.test(rest)) {
         this.skipStatement();
+      } else {
+        const words = rest.split(/\s+/).slice(0, 2).join(' ');
+        throw new DumpParseError(`unsupported statement "${words}"`, this.line);
       }
     }
   }
@@ -73,7 +86,6 @@ class Parser {
   }
 
   private insert(): void {
-    this.advance('INSERT INTO'.length);
     this.skipSpace();
     const rows = this.rowsOf(this.identifier());
     this.skipSpace();
@@ -81,7 +93,14 @@ class Parser {
     const columns: string[] = [];
     for (;;) {
       this.skipSpace();
-      columns.push(this.identifier());
+      const column = this.identifier();
+      if (columns.includes(column)) {
+        throw new DumpParseError(
+          `column "${column}" is listed twice`,
+          this.line,
+        );
+      }
+      columns.push(column);
       this.skipSpace();
       if (this.peek() === ')') {
         this.advance(1);
@@ -110,7 +129,7 @@ class Parser {
       }
       if (next !== ',') {
         throw new DumpParseError(
-          `expected "," or ";", found "${next}"`,
+          `expected "," or ";", found "${next ?? 'end of dump'}"`,
           this.line,
         );
       }
@@ -131,7 +150,7 @@ class Parser {
       }
       if (next !== ',') {
         throw new DumpParseError(
-          `expected "," or ")", found "${next}"`,
+          `expected "," or ")", found "${next ?? 'end of dump'}"`,
           this.line,
         );
       }
@@ -262,7 +281,12 @@ class Parser {
   }
 
   private expectWord(word: string): void {
-    if (!this.startsWith(word)) {
+    if (
+      !this.sql
+        .slice(this.pos, this.pos + word.length)
+        .toUpperCase()
+        .startsWith(word)
+    ) {
       throw new DumpParseError(`expected ${word}`, this.line);
     }
     this.advance(word.length);
