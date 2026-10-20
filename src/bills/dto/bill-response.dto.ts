@@ -58,6 +58,10 @@ export class BillResponseDto {
   createdAt: Date;
   updatedAt: Date;
 
+  /** The subscription that generated this bill; null for bills entered by hand. */
+  @ApiProperty({ type: String, nullable: true })
+  subscriptionId: string | null;
+
   /** Oldest first. */
   @ApiProperty({ type: PhotoResponseDto, isArray: true })
   photos: PhotoResponseDto[];
@@ -82,6 +86,7 @@ export class BillResponseDto {
       updatedBy: BillUserDto.from(bill.updatedBy),
       createdAt: bill.createdAt,
       updatedAt: bill.updatedAt,
+      subscriptionId: bill.subscriptionId,
       photos: (bill.photos ?? []).map((photo) => PhotoResponseDto.from(photo)),
     };
   }

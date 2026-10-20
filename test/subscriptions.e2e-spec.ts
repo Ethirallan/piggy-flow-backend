@@ -6,6 +6,7 @@ import {
   localToday,
   nextChargeDate,
 } from '../src/subscriptions/charge-schedule.js';
+import { SubscriptionChargerService } from '../src/subscriptions/subscription-charger.service.js';
 import {
   asUser,
   createTestApp,
@@ -139,5 +140,44 @@ describe('subscriptions (e2e)', () => {
     await bob.get(`/subscriptions/${randomUUID()}`).expect(404);
     await ana.get('/subscriptions/123').expect(400);
     await request(app.getHttpServer()).get('/subscriptions').expect(401);
+  });
+
+  it('links generated bills to their subscription', async () => {
+    const ana = asUser(app, (await registerUser(app)).accessToken);
+    const accountId = await personalAccountId(ana);
+    const shop = (
+      await ana
+        .post(`/accounts/${accountId}/shops`)
+        .send({ name: 'Netflix' })
+        .expect(201)
+    ).body as { id: string };
+    const subscription = (
+      await ana
+        .post('/subscriptions')
+        .send({
+          accountId,
+          priceCents: 1299,
+          chargeDay: Number(localToday().slice(8)),
+          name: 'Streaming',
+          shopId: shop.id,
+        })
+        .expect(201)
+    ).body as { id: string };
+
+    expect(await app.get(SubscriptionChargerService).run()).toBe(1);
+
+    const bills = (await ana.get('/bills').expect(200)).body as {
+      items: unknown[];
+    };
+    expect(bills.items).toEqual([
+      expect.objectContaining({
+        subscriptionId: subscription.id,
+        comment: 'Streaming',
+        priceCents: 1299,
+        shop: { id: shop.id, name: 'Netflix' },
+        createdBy: null,
+      }),
+    ]);
+    await ana.delete(`/accounts/${accountId}/shops/${shop.id}`).expect(409);
   });
 });

@@ -10,10 +10,12 @@ import { compareByName } from '../common/compare-by-name.js';
 import { hasBills } from '../common/bill-usage.js';
 import { isRestrictViolation } from '../common/db-errors.js';
 import { rethrowListWriteError } from '../common/list-write-errors.js';
+import { hasSubscriptions } from '../common/subscription-usage.js';
 import { Shop } from './shop.entity.js';
 
 export const SHOP_NAME_TAKEN = 'A shop with that name already exists';
 export const SHOP_IN_USE = 'Shop is in use by bills';
+export const SHOP_IN_USE_BY_SUBSCRIPTIONS = 'Shop is in use by subscriptions';
 export const SHOP_NOT_FOUND = 'Shop not found';
 
 @Injectable()
@@ -72,14 +74,30 @@ export class ShopsService {
     ) {
       throw new ConflictException(SHOP_IN_USE);
     }
-    // Subscriptions add their "still in use" check here. A bill saved after
-    // the check trips the RESTRICT foreign key: the same 409.
+    if (
+      await hasSubscriptions(this.shops.manager, accountId, {
+        column: 'shop_id',
+        id,
+      })
+    ) {
+      throw new ConflictException(SHOP_IN_USE_BY_SUBSCRIPTIONS);
+    }
+    // A bill or subscription saved after the checks trips the RESTRICT
+    // foreign key: the same 409s.
     let affected: number | null | undefined;
     try {
       ({ affected } = await this.shops.delete({ id, accountId }));
     } catch (error) {
       if (isRestrictViolation(error)) {
-        throw new ConflictException(SHOP_IN_USE);
+        // A bill or subscription saved after the checks: say which.
+        throw new ConflictException(
+          (await hasBills(this.shops.manager, accountId, {
+            column: 'shop_id',
+            id,
+          }))
+            ? SHOP_IN_USE
+            : SHOP_IN_USE_BY_SUBSCRIPTIONS,
+        );
       }
       throw error;
     }

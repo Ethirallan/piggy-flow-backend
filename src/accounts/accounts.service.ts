@@ -93,8 +93,9 @@ export class AccountsService {
       if (await hasBills(manager, account.id)) {
         throw new ConflictException(ACCOUNT_HAS_BILLS);
       }
-      // Subscriptions add their "still in use" check here. The bills'
-      // RESTRICT foreign key is the backstop for anything the check missed.
+      // Subscriptions cascade with the account (ON DELETE CASCADE); bills
+      // block it above. The bills' RESTRICT foreign key is the backstop for
+      // anything the check missed.
       try {
         await manager.getRepository(Account).delete({ id: account.id });
       } catch (error) {
