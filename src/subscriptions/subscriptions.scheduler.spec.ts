@@ -25,16 +25,20 @@ describe('SubscriptionsScheduler', () => {
     return { scheduler, run, release: () => release() };
   };
 
-  it('skips a run while the previous one is still going', async () => {
+  it('runs once more after the current run when asked while it is going', async () => {
     process.env.SUBSCRIPTION_CHARGES_DISABLED = 'false';
     const { scheduler, run, release } = setup();
 
     const first = scheduler.chargeDue();
     await scheduler.chargeDue();
+    await scheduler.chargeDue();
+    expect(run).toHaveBeenCalledTimes(1);
+    release();
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
     release();
     await first;
 
-    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledTimes(2);
   });
 
   it('does nothing when charges are disabled', async () => {

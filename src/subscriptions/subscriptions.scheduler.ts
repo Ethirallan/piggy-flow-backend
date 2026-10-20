@@ -15,6 +15,8 @@ const chargesDisabled = () =>
 export class SubscriptionsScheduler implements OnApplicationBootstrap {
   private readonly logger = new Logger(SubscriptionsScheduler.name);
   private running = false;
+  /** A run was requested while one was going: run once more after it. */
+  private rerun = false;
 
   constructor(private readonly charger: SubscriptionChargerService) {}
 
@@ -28,17 +30,27 @@ export class SubscriptionsScheduler implements OnApplicationBootstrap {
     timeZone: CHARGE_TIME_ZONE,
   })
   async chargeDue(): Promise<void> {
-    if (chargesDisabled() || this.running) {
+    if (chargesDisabled()) {
+      return;
+    }
+    if (this.running) {
+      // e.g. the startup run still going at 00:05: today's charges must not wait a day.
+      this.rerun = true;
       return;
     }
     this.running = true;
     try {
-      await this.charger.run();
-    } catch (error) {
-      this.logger.error({
-        event: 'subscriptions.run_failed',
-        error: String(error),
-      });
+      do {
+        this.rerun = false;
+        try {
+          await this.charger.run();
+        } catch (error) {
+          this.logger.error({
+            event: 'subscriptions.run_failed',
+            error: String(error),
+          });
+        }
+      } while (this.rerun);
     } finally {
       this.running = false;
     }
