@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AppController } from './app.controller.js';
 import { AuthModule } from './auth/auth.module.js';
 import { ConfigModule } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { LoggerModule } from 'nestjs-pino';
 import { validateEnv } from './config/env.validation.js';
@@ -19,6 +20,7 @@ import { SubscriptionsModule } from './subscriptions/subscriptions.module.js';
   imports: [
     ConfigModule.forRoot({ isGlobal: true, validate: validateEnv }),
     LoggerModule.forRoot(buildLoggerParams()),
+    ScheduleModule.forRoot(),
     TypeOrmModule.forRoot({
       ...dataSourceOption,
       entities: [],
