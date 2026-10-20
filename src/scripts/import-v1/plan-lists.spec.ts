@@ -1,5 +1,6 @@
 import { toSnapshot } from './v1-snapshot.js';
 import { v1Tables } from './testing/v1-tables.js';
+import { planLists } from './plan-lists.js';
 import { planImport, type V2User } from './plan.js';
 
 const ts = (day: number) =>
@@ -151,5 +152,93 @@ describe('shops and categories', () => {
         bill: [bill(1, null, '1')],
       }),
     ).toThrow('shop 1: blank name');
+  });
+
+  it('merges names that only differ after the 100th character, reporting the cut', () => {
+    const long = 'x'.repeat(100);
+    const result = plan({
+      shop: [shop(1, `${long}A`, 1), shop(2, `${long}B`, 2)],
+      category: [],
+      bill: [bill(1, null, '1'), bill(2, null, '2')],
+    });
+
+    expect(result.shops.map((s) => s.name)).toEqual([long]);
+    expect(new Set(result.bills.map((b) => b.shopId))).toEqual(
+      new Set([result.shops[0].id]),
+    );
+    expect(result.report.fixUps).toContain(
+      'shop 1: name cut to 100 characters',
+    );
+    expect(result.report.merged).toEqual([
+      { kind: 'shop', accountId: 'ana-personal', name: long, v1Ids: [1, 2] },
+    ]);
+  });
+
+  it('drops an unused shop of a dismissed owner', () => {
+    const snapshot = toSnapshot(
+      v1Tables({
+        shop: [shop(1, 'Gone', 1)],
+        category: [],
+        bill: [],
+        bill_photo: [],
+        subscription: [],
+      }),
+    );
+    const report = { merged: [], fixUps: [] } as unknown as Parameters<
+      typeof planLists
+    >[4];
+    const lists = planLists(
+      snapshot,
+      [],
+      () => null,
+      () => 'x',
+      report,
+      [],
+    );
+    expect(lists.shops).toEqual([]);
+  });
+
+  it('keeps the first category’s emoji when categories merge', () => {
+    const category = (
+      id: number,
+      name: string,
+      day: number,
+      emoji: string,
+    ) => ({
+      id: String(id),
+      name,
+      created: ts(day),
+      lastUpdate: ts(day),
+      userId: '1',
+      emoji,
+    });
+    const result = plan({
+      shop: [],
+      category: [category(1, 'Food', 5, '🍎'), category(2, 'FOOD', 2, '🍕')],
+      bill: [bill(1, null, null, '1')],
+    });
+
+    expect(result.categories.map((c) => [c.name, c.emoji])).toEqual([
+      ['FOOD', '🍕'],
+    ]);
+  });
+
+  it('stops on a blank category name', () => {
+    expect(() =>
+      plan({
+        shop: [],
+        category: [
+          {
+            id: '1',
+            name: ' ',
+            created: ts(1),
+            lastUpdate: ts(1),
+            userId: '1',
+            emoji: null,
+          },
+        ],
+        bill: [],
+      }),
+    ).toThrow('category 1: blank name');
   });
 });

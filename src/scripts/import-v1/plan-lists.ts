@@ -93,10 +93,24 @@ function placeAll(
       placements.set(`${accountId}|${list.id}`, { accountId, list });
   }
 
-  // Group by (account, lower(trimmed name)).
+  // The stored name: trimmed, cut to the column length, trimmed again.
+  const storedName = new Map<number, string>();
+  for (const { list } of placements.values()) {
+    if (storedName.has(list.id)) continue;
+    const trimmed = list.name.trim();
+    const name = cutCodePoints(trimmed, NAME_MAX).trim();
+    if (Array.from(trimmed).length > NAME_MAX) {
+      report.fixUps.push(
+        `${kind} ${list.id}: name cut to ${NAME_MAX} characters`,
+      );
+    }
+    storedName.set(list.id, name);
+  }
+
+  // Group by (account, lower(stored name)): what v2's unique index compares.
   const groups = new Map<string, { accountId: string; lists: V1Shop[] }>();
   for (const { accountId, list } of placements.values()) {
-    const name = list.name.trim();
+    const name = storedName.get(list.id)!;
     if (!name) {
       problems.push(`${kind} ${list.id}: blank name`);
       continue;
